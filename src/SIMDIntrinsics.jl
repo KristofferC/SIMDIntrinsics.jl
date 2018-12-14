@@ -1,6 +1,5 @@
 module SIMDIntrinsics
 
-# TODO masked loads and stores
 # TODO SIMD intrinsics
 
 const VE = Base.VecElement

@@ -1,9 +1,7 @@
-authors = ["Kristoffer Carlsson <kcarlsson89@gmail.com>"]
 name = "SIMDIntrinsics"
 uuid = "35fb604a-ffdf-11e8-0d1a-af07cb8bab46"
+authors = ["Kristoffer Carlsson <kcarlsson89@gmail.com>"]
 version = "0.1.0"
-
-[deps]
 
 [compat]
 julia = "1.0"

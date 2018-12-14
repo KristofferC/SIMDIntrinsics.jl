@@ -1,6 +1,8 @@
 # LLVM operations and intrinsics
 module LLVM
 
+# TODO masked loads and stores
+
 import ..SIMDIntrinsics: VE, Vec, IntegerTypes, IntTypes, UIntTypes, FloatingTypes
 
 const d = Dict{DataType, String}(
@@ -52,7 +54,6 @@ for fs in BINARY_OPS
             %3 = $ff <$(N) x $(d[T])> %0, %1
             ret <$(N) x $(d[T])> %3
             """
-            @show s
             return :(
                 $(Expr(:meta, :inline));
                 Base.llvmcall($s, Vec{N, T}, Tuple{Vec{N, T}, Vec{N, T}}, x, y)
@@ -335,6 +336,25 @@ end
         $(Expr(:meta, :inline));
         Base.llvmcall($s, Vec{N, T}, Tuple{Vec{N, Bool}, Vec{N, T}, Vec{N, T}}, cond, x, y)
     )
+end
+
+###########
+# Fmuladd #
+###########
+
+const MULADD_INTRINSICS = [
+    :fmuladd,
+    :fma,
+]
+
+for f in MULADD_INTRINSICS
+    @eval @generated function $(f)(a::Vec{N, T}, b::Vec{N, T}, c::Vec{N, T}) where {N, T}
+        ff = llvm_name($(QuoteNode(f)), N, T)
+        return :(
+            $(Expr(:meta, :inline));
+            ccall($ff, llvmcall, Vec{N, T}, (Vec{N, T}, Vec{N, T}, Vec{N, T}), a, b, c)
+        )
+    end
 end
 
 end
