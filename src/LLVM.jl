@@ -1,22 +1,9 @@
-#
-#module SIMDIntrinsics
+# LLVM operations and intrinsics
+module LLVM
 
-const VE = Base.VecElement
-const Vec{N, T} = NTuple{N, Base.VecElement{T}}
-
-include("macro.jl")
-
-const BoolTypes = Union{Bool}
-const IntTypes = Union{Int8, Int16, Int32, Int64, Int128}
-const UIntTypes = Union{UInt8, UInt16, UInt32, UInt64, UInt128}
-const IntegerTypes = Union{BoolTypes, IntTypes, UIntTypes}
-const FloatingTypes = Union{Float32, Float64} # Float16 support is non native in Julia
-const ScalarTypes = Union{IntegerTypes, FloatingTypes}
-
-struct LLVMBool end
+import ..SIMDIntrinsics: VE, Vec, IntegerTypes, IntTypes, UIntTypes, FloatingTypes
 
 const d = Dict{DataType, String}(
-    LLVMBool=> "i1",
     Bool    => "i8",
     Int8    => "i8",
     Int16   => "i16",
@@ -30,11 +17,10 @@ const d = Dict{DataType, String}(
     UInt64  => "i64",
     UInt128 => "i128",
 
-    Float16 => "half",
+    #Float16 => "half",
     Float32 => "float",
     Float64 => "double",
 )
-
 
 #####################
 # Binary operators  #
@@ -61,10 +47,12 @@ const BINARY_OPS = [
 for fs in BINARY_OPS
     for (f, constraint) in zip(fs, (IntTypes, UIntTypes, FloatingTypes))
         @eval @generated function $f(x::Vec{N, T}, y::Vec{N, T}) where {N, T <: $constraint}
+            ff = $(QuoteNode(f))
             s = """
-            %3 = $($f) <$(N) x $(d[T])> %0, %1
+            %3 = $ff <$(N) x $(d[T])> %0, %1
             ret <$(N) x $(d[T])> %3
             """
+            @show s
             return :(
                 $(Expr(:meta, :inline));
                 Base.llvmcall($s, Vec{N, T}, Tuple{Vec{N, T}, Vec{N, T}}, x, y)
@@ -107,9 +95,9 @@ end
 # Vector Operations #
 #####################
 
-@generated function extractelement(x::Vec{N, T}, i::IntTypes) where {N, T}
+@generated function extractelement(x::Vec{N, T}, i::I) where {N, T, I <: IntTypes}
     s = """
-    %3 = extractelement <$N x $(d[T])> %0, $(d[T]) %1
+    %3 = extractelement <$N x $(d[T])> %0, $(d[I]) %1
     ret $(d[T]) %3
     """
     return :(
@@ -129,6 +117,18 @@ end
     )
 end
 
+@generated function shufflevector(x::Vec{N, T}, y::Vec{N, T}, ::Val{I}) where {N, T, I}
+    shfl = join((string("i32 ", i) for i in I), ", ")
+    s = """
+    %res = shufflevector <$N x $(d[T])> %0, <$N x $(d[T])> %1, <$N x i32> <$shfl>
+    ret <$N x $(d[T])> %res
+    """
+    return :(
+        $(Expr(:meta, :inline));
+        Base.llvmcall($s, Vec{N, T}, Tuple{Vec{N, T}, Vec{N, T}}, x, y)
+    )
+end
+
 #########################
 # Conversion Operations #
 #########################
@@ -145,8 +145,9 @@ for (fs, criteria) in CONVERSION_OPS_SIZE_CHANGE_SAME_ELEMENTS
         @eval @generated function $f(::Type{Vec{N, T2}}, x::Vec{N, T1}) where {N, T1 <: $constraint, T2 <: $constraint}
             sT1, sT2 = sizeof(T1) * 8, sizeof(T2) * 8
             @assert $criteria(sT1, sT2) "size of conversion type ($T2: $sT2) must be $($criteria) than the element type ($T1: $sT1)"
+            ff = $(QuoteNode(f))
             s = """
-            %2 = $($f) <$(N) x $(d[T1])> %0 to <$(N) x $(d[T2])>
+            %2 = $ff <$(N) x $(d[T1])> %0 to <$(N) x $(d[T2])>
             ret <$(N) x $(d[T2])> %2
             """
             return :(
@@ -157,7 +158,6 @@ for (fs, criteria) in CONVERSION_OPS_SIZE_CHANGE_SAME_ELEMENTS
     end
 end
 
-
 const CONVERSION_TYPES = [
     (:fptoui, (FloatingTypes, UIntTypes)),
     (:fptosi, (FloatingTypes, IntTypes)),
@@ -167,8 +167,9 @@ const CONVERSION_TYPES = [
 
 for (f, (from, to)) in CONVERSION_TYPES
     @eval @generated function $f(::Type{Vec{N, T2}}, x::Vec{N, T1}) where {N, T1 <: $from, T2 <: $to}
+        ff = $(QuoteNode(f))
         s = """
-        %2 = $($f) <$(N) x $(d[T1])> %0 to <$(N) x $(d[T2])>
+        %2 = $ff <$(N) x $(d[T1])> %0 to <$(N) x $(d[T2])>
         ret <$(N) x $(d[T2])> %2
         """
         return :(
@@ -215,15 +216,16 @@ end
 ###############
 
 const CMP_FLAGS = [:eq ,:ne ,:ugt ,:uge ,:ult ,:ule ,:sgt ,:sge ,:slt ,:sle]
-const FCMP_FLAGS = [false ,:oeq ,:ogt ,:oge ,:olt ,:ole ,:one ,:ord ,:ueq ,:ugt ,:uge ,:ult ,:ule ,:une ,:uno ,:true]
+const FCMP_FLAGS = [:false ,:oeq ,:ogt ,:oge ,:olt ,:ole ,:one ,:ord ,:ueq ,:ugt ,:uge ,:ult ,:ule ,:une ,:uno , :true]
 
 for (f, constraint, flags) in zip(("cmp", "fcmp"), (IntTypes, FloatingTypes), (CMP_FLAGS, FCMP_FLAGS))
     for flag in flags
         ftot = Symbol(string(f, "_", flag))
         @eval @generated function $ftot(x::Vec{N, T}, y::Vec{N, T}) where {N, T <: $constraint}
             fflag = $(QuoteNode(flag))
+            ff = $(QuoteNode(ftot))
             s = """
-            %3 = $($f) $(fflag) <$(N) x $(d[T])> %0, %1
+            %3 = $ff $(fflag) <$(N) x $(d[T])> %0, %1
             %4 = zext <$(N) x i1> %3 to <$(N) x i8>
             ret <$(N) x i8> %4
             """
@@ -262,9 +264,10 @@ const UNARY_INTRINSICS = [
 for f in UNARY_INTRINSICS
     @eval begin
     @generated function $(f)(x::Vec{N, T}) where {N, T <: FloatingTypes}
+        ff = llvm_name($(QuoteNode(f)), N, T)
         return :(
             $(Expr(:meta, :inline));
-            ccall($(llvm_name($f, N, T)), llvmcall, Vec{N, T}, (Vec{N, T},), x)
+            ccall($ff, llvmcall, Vec{N, T}, (Vec{N, T},), x)
         )
     end
     end
@@ -286,9 +289,10 @@ const BINARY_INTRINSICS = [
 
 for f in BINARY_INTRINSICS
     @eval @generated function $(f)(x::Vec{N, T}, y::Vec{N, T}) where {N, T <: FloatingTypes}
+        ff = llvm_name($(QuoteNode(f)), N, T)
         return :(
             $(Expr(:meta, :inline));
-            ccall($(llvm_name($f, N, T)), llvmcall, Vec{N, T}, (Vec{N, T}, Vec{N, T}), x, y)
+            ccall($ff, llvmcall, Vec{N, T}, (Vec{N, T}, Vec{N, T}), x, y)
         )
     end
 end
@@ -309,15 +313,28 @@ const BITMANIPULATION_INTRINSICS = [
 
 for f in BITMANIPULATION_INTRINSICS
     @eval @generated function $(f)(x::Vec{N, T}) where {N, T <: IntegerTypes}
+        ff = llvm_name($(QuoteNode(f)), N, T)
         return :(
             $(Expr(:meta, :inline));
-            ccall($(llvm_name($f, N, T)), llvmcall, Vec{N, T}, (Vec{N, T},), x)
+            ccall(ff, llvmcall, Vec{N, T}, (Vec{N, T},), x)
         )
     end
 end
 
+##########
+# Select #
+##########
 
+@generated function select(cond::Vec{N, Bool}, x::Vec{N, T}, y::Vec{N, T}) where {N, T}
+    s = """
+    %cond = trunc <$(N) x i8> %0 to <$(N) x i1>
+    %res = select <$N x i1> %cond, <$N x $(d[T])> %1, <$N x $(d[T])> %2
+    ret <$N x $(d[T])> %res
+    """
+    return :(
+        $(Expr(:meta, :inline));
+        Base.llvmcall($s, Vec{N, T}, Tuple{Vec{N, Bool}, Vec{N, T}, Vec{N, T}}, cond, x, y)
+    )
+end
 
-
-
-#end
+end
