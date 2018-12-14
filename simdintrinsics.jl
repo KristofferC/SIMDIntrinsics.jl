@@ -1,7 +1,8 @@
 #
-module SIMDIntrinsics
+#module SIMDIntrinsics
 
-const VE{N, T} = NTuple{N, Base.VecElement{T}}
+const VE = Base.VecElement
+const Vec{N, T} = NTuple{N, Base.VecElement{T}}
 
 include("macro.jl")
 
@@ -9,7 +10,7 @@ const BoolTypes = Union{Bool}
 const IntTypes = Union{Int8, Int16, Int32, Int64, Int128}
 const UIntTypes = Union{UInt8, UInt16, UInt32, UInt64, UInt128}
 const IntegerTypes = Union{BoolTypes, IntTypes, UIntTypes}
-const FloatingTypes = Union{Float16, Float32, Float64}
+const FloatingTypes = Union{Float32, Float64} # Float16 support is non native in Julia
 const ScalarTypes = Union{IntegerTypes, FloatingTypes}
 
 struct LLVMBool end
@@ -34,51 +35,94 @@ const d = Dict{DataType, String}(
     Float64 => "double",
 )
 
+
 #####################
 # Binary operators  #
 #####################
 
 # Type preserving
 
-# julia => ((signed, unsigned, float), types)
-const BINARYOPS = Dict(
-    :add => (("add", "add", "fadd"),   ScalarTypes),
-    :sub => (("sub", "sub", "fsub"),   ScalarTypes),
-    :mul => (("mul", "mul", "fmul"),   ScalarTypes),
-    :div => (("sdiv", "udiv", "fdiv"), ScalarTypes),
-    :rem => (("srem", "urem", "frem"), ScalarTypes),
+# (signed, unsigned, float)
+const BINARYOPS = [
+    (:add, :add, :fadd),
+    (:sub, :sub, :fsub),
+    (:mul, :mul, :fmul),
+    (:sdiv, :udiv, :fdiv),
+    (:srem, :urem, :frem),
     # Bitwise
-    :shl => (("shl", "shl", ""),       IntegerTypes),
-    :lshr => (("lshr", "lshr", ""),       IntegerTypes),
-    :ashr => (("ashr", "ashr", ""),       IntegerTypes),
-    :and => (("and", "and", ""),       IntegerTypes),
-    :or  => (("or", "or", ""),         IntegerTypes),
-    :xor => (("xor", "xor", ""),       IntegerTypes),
-)
-binop(f::Symbol, T) = BINARYOPS[f][1][T <: UIntTypes ? 1 : T <: IntegerTypes ? 2 : 3]
+    (:shl, :shl),
+    (:lshr, :lshr),
+    (:ashr, :ashr),
+    (:and, :and),
+    (:or, :or,),
+    (:xor, :xor),
+]
 
-for (f, (_, types)) in BINARYOPS
-    @eval begin
-    @llvmcall function $f(x::VE{N, T}, y::VE{N, T})::VE{N, T} where {N, T <: $types}
-        f = $(QuoteNode(f))
-        """
-        %3 = $(binop(f, T)) <$(N) x $(d[T])> %0, %1
-        ret <$(N) x $(d[T])> %3
-        """
-    end
+for fs in BINARYOPS
+    for (f, constraint) in zip(fs, (IntTypes, UIntTypes, FloatingTypes))
+        @eval @llvmcall function $f(x::Vec{N, T}, y::Vec{N, T})::Vec{N, T} where {N, T <: $constraint}
+            f = $(QuoteNode(f))
+            """
+            %3 = $(f) <$(N) x $(d[T])> %0, %1
+            ret <$(N) x $(d[T])> %3
+            """
+        end
     end
 end
+
 
 #####################
 # Vector Operations #
 #####################
 
-function extractelement(x::VE{N, T}, ::Val{I}) where {N, T, I}
-    @assert 0 <= I < N
-    s = "extractelement <$(N) x $(d[T])> %0, $(d[T]) %2"
+@generated function extractelement(x::Vec{N, T}, i::IntTypes) where {N, T}
+    s = """
+    %3 = extractelement <$N x $(d[T])> %0, $(d[T]) %1
+    ret $(d[T]) %3
+    """
     return :(
-        Base.llvmcall($s, VE{N, T2}, Tuple{VE{N, T1}}, x, I)
+        $(Expr(:meta, :inline));
+        Base.llvmcall($s, T, Tuple{Vec{N, T}, $i}, x, i)
     )
+end
+
+@generated function insertelement(x::Vec{N, T}, v::T, i::IntTypes) where {N, T}
+    s = """
+    %4 = insertelement <$N x $(d[T])> %0, $(d[T]) %1, $(d[i]) %2
+    ret <$N x $(d[T])> %4
+    """
+    return :(
+        $(Expr(:meta, :inline));
+        Base.llvmcall($s, Vec{N, T}, Tuple{Vec{N, T}, T, $i}, x, v, i)
+    )
+end
+
+#########################
+# Conversion Operations #
+#########################
+# Conversions
+
+const CONVERSION_OPS_SIZE_CHANGE = [
+    ((:trunc, :trunc, :fptrunc), <),
+    ((:zext, :zext,   :fpext),   >),
+    ((:sext, :sext),             >),
+]
+
+for (fs, criteria) in CONVERSION_OPS_SIZE_CHANGE
+    for (f, constraint) in zip(fs, (IntTypes, UIntTypes, FloatingTypes))
+        @eval @generated function $f(::Type{T2}, x::Vec{N, T1}) where {N, T1 <: $constraint, T2 <: $constraint}
+            sT1, sT2 = sizeof(T2) * 8, sizeof(T1) * 8
+            @assert $criteria(sT1, sT2) "size of conversion type ($T2: $sT2) must be $($criteria) than the element type ($T1: $sT2)"
+            s = """
+            %2 = $($f) <$(N) x $(d[T1])> %0 to <$(N) x $(d[T2])>
+            ret <$(N) x $(d[T2])> %2
+            """
+            return :(
+                $(Expr(:meta, :inline));
+                Base.llvmcall($s, Vec{N, T2}, Tuple{Vec{N, T1}}, x)
+            )
+        end
+    end
 end
 
 
@@ -91,20 +135,6 @@ const BINARYOPS_PREDICATES = Dict(
     :mul => ("idiv", "udiv", "fdiv"),
 )
 
-#########################
-# Conversion Operations #
-#########################
-# Conversions
-
-@generated function zext(::Type{T2}, x::VE{N, T1}) where {N, T1 <: IntegerTypes, T2 <: IntegerTypes}
-    s = """
-    %2 = zext <$(N) x $(d[T1])> %0 to <$(N) x $(d[T2])>
-    ret <$(N) x $(d[T2])> %2
-    """
-    return :(
-        Base.llvmcall($s, VE{N, T2}, Tuple{VE{N, T1}}, x)
-    )
-end
 
 ####################
 # Unary operators  #
@@ -114,13 +144,29 @@ suffix(N::Integer, T::Type) = "v$(N)$(T<:IntegerTypes ? "i" : "f")$(8*sizeof(T))
 llvm_name(llvmf, N, T) = string("llvm", ".", llvmf, ".", suffix(N, T))
 
 const UNARY_OPERATORS = [
-    :sqrt => "sqrt",
+    :sqrt
+    :sin
+    :cos
+    :exp
+    :exp2
+    :log
+    :log10
+    :log2
+    :fabs
+    :floor
+    :ceil
+    :rint
+    :nearbyint
+    :round
 ]
 
-for (f, llvmf) in UNARY_OPERATORS
+for f in UNARY_OPERATORS
     @eval begin
-    @generated function $(f)(x::VE{N, T}) where {N, T <: ScalarTypes}
-        :(ccall($(llvm_name($llvmf, N, T)), llvmcall, VE{N, T}, (VE{N, T},), x))
+    @generated function $(f)(x::Vec{N, T}) where {N, T <: FloatingTypes}
+        return :(
+            $(Expr(:meta, :inline));
+            ccall($(llvm_name($f, N, T)), llvmcall, Vec{N, T}, (Vec{N, T},), x)
+        )
     end
     end
 end
@@ -132,4 +178,4 @@ end
 # Promotion
 ############
 
-end
+#end
