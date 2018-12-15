@@ -22,10 +22,6 @@ end
 # noop convert
 @inline Base.convert(::Type{Vec{N,T}}, v::Vec{N,T}) where {N,T} = v
 
-#  zext, sext, fpexpt
-# trunc, trunc, fptrunc
-# identity
-
 # No checks for underflow or overflow!
 @inline function Base.convert(::Type{Vec{N, T1}}, v::Vec{N, T2}) where {T1, T2, N}
     if T1 <: IntegerTypes
@@ -59,9 +55,6 @@ end
     error("unreachable")
 end
 
-Base.reinterpret(::Type{Vec{N1, T1}}, v::Vec) where {T1, N1} = Vec(LLVM.bitcast(LLVM.LVec{N1, T1}, v.data))
-Base.reinterpret(::Type{T}, v::Vec) where {T} = Vec(LLVM.bitcast(T, v.data))
-
 
 Base.eltype(::Type{Vec{N,T}}) where {N,T} = T
 Base.ndims( ::Type{Vec{N,T}}) where {N,T} = 1
@@ -94,6 +87,8 @@ function Base.setindex(x::Vec{N, T}, v, i::IntegerTypes) where {N, T}
     return LLVM.insertelement(x.data, T(v), i-1)
 end
 
+Base.reinterpret(::Type{Vec{N1, T1}}, v::Vec) where {T1, N1} = Vec(LLVM.bitcast(LLVM.LVec{N1, T1}, v.data))
+Base.reinterpret(::Type{T}, v::Vec) where {T} = Vec(LLVM.bitcast(T, v.data))
 
 const BINARY_OPS = [
     (:+, IntegerTypes, LLVM.add)
