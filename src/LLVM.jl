@@ -316,10 +316,24 @@ for f in BITMANIPULATION_INTRINSICS
         ff = llvm_name($(QuoteNode(f)), N, T)
         return :(
             $(Expr(:meta, :inline));
-            ccall(ff, llvmcall, LVec{N, T}, (LVec{N, T},), x)
+            ccall($ff, llvmcall, LVec{N, T}, (LVec{N, T},), x)
         )
     end
 end
+
+@generated function or(x::LVec{N, T}) where {N, T <: IntegerTypes}
+    ff = llvm_name(:xor, N, T)
+    shfl = join((string(d[T], " ", -1) for i in 1:N), ", ")
+    s = """
+    %res = xor <$N x $(d[T])> %0, <$shfl>
+    ret <$N x $(d[T])> %res
+    """
+    return :(
+        $(Expr(:meta, :inline));
+        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}}, x)
+    )
+end
+
 
 ##########
 # Select #

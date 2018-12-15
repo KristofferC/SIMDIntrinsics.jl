@@ -138,9 +138,44 @@ const BINARY_OPS = [
 
 for (op, constraint, llvmop) in BINARY_OPS
     @eval function (Base.$op)(x::Vec{N, T}, y::Vec{N, T}) where {N, T <: $constraint}
-        xx, yy = promote(x, y)
-        Vec($(llvmop)(xx.data, yy.data))
+        Vec($(llvmop)(x.data, y.data))
     end
 end
+
+const UNARY_OPS = [
+    (:sqrt, FloatingTypes, LLVM.sqrt),
+    (:sin, FloatingTypes, LLVM.sin),
+    (:cos, FloatingTypes, LLVM.cos),
+    (:exp, FloatingTypes, LLVM.exp),
+    (:exp2, FloatingTypes, LLVM.exp2),
+    (:log, FloatingTypes, LLVM.log),
+    (:log10, FloatingTypes, LLVM.log10),
+    (:log2, FloatingTypes, LLVM.log2),
+    (:abs, FloatingTypes, LLVM.fabs),
+    (:floor, FloatingTypes, LLVM.floor),
+    (:ceil, FloatingTypes, LLVM.ceil),
+    # (:rint, FloatingTypes, LLVM),
+    # (:nearbyint, FloatingTypes, LLVM),
+    (:round, FloatingTypes, LLVM.round),
+
+    #:bitreverse,
+    (:bswap, IntegerTypes, LLVM.bswap),
+    (:count_ones, IntegerTypes, LLVM.ctpop),
+    (:leading_zeros, IntegerTypes, LLVM.ctlz),
+    (:trailing_zeros, IntegerTypes, LLVM.cttz),
+    (:~, IntegerTypes, LLVM.or)
+    #:fshl,
+    #:fshr,
+]
+
+for (op, constraint, llvmop) in UNARY_OPS
+    @eval function (Base.$op)(x::Vec{<:Any, <:$constraint})
+        Vec($(llvmop)(x.data))
+    end
+end
+
+Base.leading_ones(x::Vec{<:Any, <:IntegerTypes})  = leading_zeros(~(x))
+Base.trailing_ones(x::Vec{<:Any, <:IntegerTypes}) = trailing_zeros(~(x))
+Base.count_zeros(x::Vec{<:Any, <:IntegerTypes}) = count_zeros(~(x))
 
 end
