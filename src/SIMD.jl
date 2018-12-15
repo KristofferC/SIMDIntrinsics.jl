@@ -59,6 +59,10 @@ end
     error("unreachable")
 end
 
+Base.reinterpret(::Type{Vec{N1, T1}}, v::Vec) where {T1, N1} = Vec(LLVM.bitcast(LLVM.LVec{N1, T1}, v.data))
+Base.reinterpret(::Type{T}, v::Vec) where {T} = Vec(LLVM.bitcast(T, v.data))
+
+
 Base.eltype(::Type{Vec{N,T}}) where {N,T} = T
 Base.ndims( ::Type{Vec{N,T}}) where {N,T} = 1
 Base.length(::Type{Vec{N,T}}) where {N,T} = N

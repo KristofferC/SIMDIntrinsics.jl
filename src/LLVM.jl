@@ -184,29 +184,29 @@ end
 # Bitcast #
 ###########
 
-@generated function bitcast(::Type{LVec{N, T2}}, x::LVec{N, T1}) where {N, T1, T2}
-    sT2, sT1 = sizeof(T2) * 8, sizeof(T1) * 8
-    @assert sT1 == sT2 "size of conversion type ($T2: $sT2) must be equal to the element type ($T1: $sT1)"
+@generated function bitcast(::Type{LVec{N1, T1}}, x::LVec{N2, T2}) where {N1, T1, N2, T2}
+    sT1, sT2 = sizeof(T1) * 8 * N1, sizeof(T2) * 8 * N2
+    @assert sT1 == sT2 "size of conversion type ($N1 x $T1: $sT1) must be equal to the vector type ($N2 x $T2: $sT2)"
     s = """
-    %2 = bitcast <$(N) x $(d[T1])> %0 to <$(N) x $(d[T2])>
-    ret <$(N) x $(d[T2])> %2
+    %2 = bitcast <$(N2) x $(d[T2])> %0 to <$(N1) x $(d[T1])>
+    ret <$(N1) x $(d[T1])> %2
     """
     return :(
         $(Expr(:meta, :inline));
-        Base.llvmcall($s, LVec{N, T2}, Tuple{LVec{N, T1}}, x)
+        Base.llvmcall($s, LVec{N1, T1}, Tuple{LVec{N2, T2}}, x)
     )
 end
 
-@generated function bitcast(::Type{T2}, x::LVec{N, T1}) where {N, T1, T2}
-    sT1, sT2 = sizeof(T2) * 8, sizeof(T1) * 8 * N
-    @assert sT1 == sT2 "size of conversion type ($T2: $sT2) must be equal to the element type ($T1 x $N: $sT1)"
+@generated function bitcast(::Type{T1}, x::LVec{N2, T2}) where {T1, N2, T2}
+    sT1, sT2 = sizeof(T1) * 8, sizeof(T2) * 8 * N2
+    @assert sT1 == sT2 "size of conversion type ($T1: $sT1) must be equal to the vector type ($N2 x $T2: $sT2)"
     s = """
-    %2 = bitcast <$(N) x $(d[T1])> %0 to $(d[T2])
-    ret $(d[T2]) %2
+    %2 = bitcast <$(N2) x $(d[T2])> %0 to $(d[T1])
+    ret $(d[T1]) %2
     """
     return :(
         $(Expr(:meta, :inline));
-        Base.llvmcall($s, T2, Tuple{LVec{N, T1}}, x)
+        Base.llvmcall($s, T1, Tuple{LVec{N2, T2}}, x)
     )
 end
 
@@ -226,7 +226,7 @@ for (f, constraint, flags) in zip(("icmp", "fcmp"), (IntTypes, FloatingTypes), (
             ff = $(QuoteNode(f))
             s = """
             %3 = $ff $(fflag) <$(N) x $(d[T])> %0, %1
-            %4 = zext <$(N) x i1> %3 to <$(N) x i8>
+            %4 = sext <$(N) x i1> %3 to <$(N) x i8>
             ret <$(N) x i8> %4
             """
             return :(
