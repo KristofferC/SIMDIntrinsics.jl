@@ -3,7 +3,7 @@ module LLVM
 
 # TODO masked loads and stores
 
-import ..SIMDIntrinsics: VE, Vec, IntegerTypes, IntTypes, UIntTypes, FloatingTypes
+import ..SIMDIntrinsics: VE, LVec, IntegerTypes, IntTypes, UIntTypes, FloatingTypes
 
 const d = Dict{DataType, String}(
     Bool    => "i8",
@@ -39,8 +39,7 @@ const BINARY_OPS = [
     (:srem, :urem, :frem),
     # Bitwise
     (:shl, :shl),
-    (:lshr, :lshr),
-    (:ashr, :ashr),
+    (:ashr, :lshr),
     (:and, :and),
     (:or, :or,),
     (:xor, :xor),
@@ -48,7 +47,7 @@ const BINARY_OPS = [
 
 for fs in BINARY_OPS
     for (f, constraint) in zip(fs, (IntTypes, UIntTypes, FloatingTypes))
-        @eval @generated function $f(x::Vec{N, T}, y::Vec{N, T}) where {N, T <: $constraint}
+        @eval @generated function $f(x::LVec{N, T}, y::LVec{N, T}) where {N, T <: $constraint}
             ff = $(QuoteNode(f))
             s = """
             %3 = $ff <$(N) x $(d[T])> %0, %1
@@ -56,7 +55,7 @@ for fs in BINARY_OPS
             """
             return :(
                 $(Expr(:meta, :inline));
-                Base.llvmcall($s, Vec{N, T}, Tuple{Vec{N, T}, Vec{N, T}}, x, y)
+                Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}, LVec{N, T}}, x, y)
             )
         end
     end
@@ -67,7 +66,7 @@ end
 ################
 
 # TODO: Alignment
-@generated function load(x::Type{Vec{N, T}}, ptr::Ptr{T}) where {N, T}
+@generated function load(x::Type{LVec{N, T}}, ptr::Ptr{T}) where {N, T}
     s = """
     %ptr = inttoptr $(d[Int]) %0 to <$N x $(d[T])>*
     %res = load <$N x $(d[T])>, <$N x $(d[T])>* %ptr, align 8
@@ -75,11 +74,11 @@ end
     """
     return :(
         $(Expr(:meta, :inline));
-        Base.llvmcall($s, Vec{N, T}, Tuple{Ptr{T}}, ptr)
+        Base.llvmcall($s, LVec{N, T}, Tuple{Ptr{T}}, ptr)
     )
 end
 
-@generated function store(x::Vec{N, T}, ptr::Ptr{T}) where {N, T}
+@generated function store(x::LVec{N, T}, ptr::Ptr{T}) where {N, T}
     s = """
     %ptr = inttoptr $(d[Int]) %1 to <$N x $(d[T])>*
     store <$N x $(d[T])> %0, <$N x $(d[T])>* %ptr, align 8
@@ -87,46 +86,46 @@ end
     """
     return :(
         $(Expr(:meta, :inline));
-        Base.llvmcall($s, Cvoid, Tuple{Vec{N, T}, Ptr{T}}, x, ptr)
+        Base.llvmcall($s, Cvoid, Tuple{LVec{N, T}, Ptr{T}}, x, ptr)
     )
 end
 
 
 #####################
-# Vector Operations #
+# LVector Operations #
 #####################
 
-@generated function extractelement(x::Vec{N, T}, i::I) where {N, T, I <: IntTypes}
+@generated function extractelement(x::LVec{N, T}, i::I) where {N, T, I <: IntTypes}
     s = """
     %3 = extractelement <$N x $(d[T])> %0, $(d[I]) %1
     ret $(d[T]) %3
     """
     return :(
         $(Expr(:meta, :inline));
-        Base.llvmcall($s, T, Tuple{Vec{N, T}, $i}, x, i)
+        Base.llvmcall($s, T, Tuple{LVec{N, T}, $i}, x, i)
     )
 end
 
-@generated function insertelement(x::Vec{N, T}, v::T, i::IntTypes) where {N, T}
+@generated function insertelement(x::LVec{N, T}, v::T, i::IntTypes) where {N, T}
     s = """
     %4 = insertelement <$N x $(d[T])> %0, $(d[T]) %1, $(d[i]) %2
     ret <$N x $(d[T])> %4
     """
     return :(
         $(Expr(:meta, :inline));
-        Base.llvmcall($s, Vec{N, T}, Tuple{Vec{N, T}, T, $i}, x, v, i)
+        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}, T, $i}, x, v, i)
     )
 end
 
-@generated function shufflevector(x::Vec{N, T}, y::Vec{N, T}, ::Val{I}) where {N, T, I}
+@generated function shuffleLVector(x::LVec{N, T}, y::LVec{N, T}, ::Val{I}) where {N, T, I}
     shfl = join((string("i32 ", i) for i in I), ", ")
     s = """
-    %res = shufflevector <$N x $(d[T])> %0, <$N x $(d[T])> %1, <$N x i32> <$shfl>
+    %res = shuffleLVector <$N x $(d[T])> %0, <$N x $(d[T])> %1, <$N x i32> <$shfl>
     ret <$N x $(d[T])> %res
     """
     return :(
         $(Expr(:meta, :inline));
-        Base.llvmcall($s, Vec{N, T}, Tuple{Vec{N, T}, Vec{N, T}}, x, y)
+        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}, LVec{N, T}}, x, y)
     )
 end
 
@@ -136,14 +135,14 @@ end
 # Conversions
 
 const CONVERSION_OPS_SIZE_CHANGE_SAME_ELEMENTS = [
-    ((:trunc, :trunc, :fptrunc), <),
-    ((:zext, :zext,   :fpext),   >),
-    ((:sext, :sext),             >),
+    ((:trunc, :trunc, :fptrunc), >),
+    ((:zext, :zext,   :fpext),   <),
+    ((:sext, :sext),             <),
 ]
 
 for (fs, criteria) in CONVERSION_OPS_SIZE_CHANGE_SAME_ELEMENTS
     for (f, constraint) in zip(fs, (IntTypes, UIntTypes, FloatingTypes))
-        @eval @generated function $f(::Type{Vec{N, T2}}, x::Vec{N, T1}) where {N, T1 <: $constraint, T2 <: $constraint}
+        @eval @generated function $f(::Type{LVec{N, T2}}, x::LVec{N, T1}) where {N, T1 <: $constraint, T2 <: $constraint}
             sT1, sT2 = sizeof(T1) * 8, sizeof(T2) * 8
             @assert $criteria(sT1, sT2) "size of conversion type ($T2: $sT2) must be $($criteria) than the element type ($T1: $sT1)"
             ff = $(QuoteNode(f))
@@ -153,7 +152,7 @@ for (fs, criteria) in CONVERSION_OPS_SIZE_CHANGE_SAME_ELEMENTS
             """
             return :(
                 $(Expr(:meta, :inline));
-                Base.llvmcall($s, Vec{N, T2}, Tuple{Vec{N, T1}}, x)
+                Base.llvmcall($s, LVec{N, T2}, Tuple{LVec{N, T1}}, x)
             )
         end
     end
@@ -167,7 +166,7 @@ const CONVERSION_TYPES = [
 ]
 
 for (f, (from, to)) in CONVERSION_TYPES
-    @eval @generated function $f(::Type{Vec{N, T2}}, x::Vec{N, T1}) where {N, T1 <: $from, T2 <: $to}
+    @eval @generated function $f(::Type{LVec{N, T2}}, x::LVec{N, T1}) where {N, T1 <: $from, T2 <: $to}
         ff = $(QuoteNode(f))
         s = """
         %2 = $ff <$(N) x $(d[T1])> %0 to <$(N) x $(d[T2])>
@@ -175,7 +174,7 @@ for (f, (from, to)) in CONVERSION_TYPES
         """
         return :(
             $(Expr(:meta, :inline));
-            Base.llvmcall($s, Vec{N, T2}, Tuple{Vec{N, T1}}, x)
+            Base.llvmcall($s, LVec{N, T2}, Tuple{LVec{N, T1}}, x)
         )
     end
 end
@@ -185,7 +184,7 @@ end
 # Bitcast #
 ###########
 
-@generated function bitcast(::Type{Vec{N, T2}}, x::Vec{N, T1}) where {N, T1, T2}
+@generated function bitcast(::Type{LVec{N, T2}}, x::LVec{N, T1}) where {N, T1, T2}
     sT2, sT1 = sizeof(T2) * 8, sizeof(T1) * 8
     @assert sT1 == sT2 "size of conversion type ($T2: $sT2) must be equal to the element type ($T1: $sT1)"
     s = """
@@ -194,11 +193,11 @@ end
     """
     return :(
         $(Expr(:meta, :inline));
-        Base.llvmcall($s, Vec{N, T2}, Tuple{Vec{N, T1}}, x)
+        Base.llvmcall($s, LVec{N, T2}, Tuple{LVec{N, T1}}, x)
     )
 end
 
-@generated function bitcast(::Type{T2}, x::Vec{N, T1}) where {N, T1, T2}
+@generated function bitcast(::Type{T2}, x::LVec{N, T1}) where {N, T1, T2}
     sT1, sT2 = sizeof(T2) * 8, sizeof(T1) * 8 * N
     @assert sT1 == sT2 "size of conversion type ($T2: $sT2) must be equal to the element type ($T1 x $N: $sT1)"
     s = """
@@ -207,7 +206,7 @@ end
     """
     return :(
         $(Expr(:meta, :inline));
-        Base.llvmcall($s, T2, Tuple{Vec{N, T1}}, x)
+        Base.llvmcall($s, T2, Tuple{LVec{N, T1}}, x)
     )
 end
 
@@ -219,12 +218,12 @@ end
 const CMP_FLAGS = [:eq ,:ne ,:ugt ,:uge ,:ult ,:ule ,:sgt ,:sge ,:slt ,:sle]
 const FCMP_FLAGS = [:false ,:oeq ,:ogt ,:oge ,:olt ,:ole ,:one ,:ord ,:ueq ,:ugt ,:uge ,:ult ,:ule ,:une ,:uno , :true]
 
-for (f, constraint, flags) in zip(("cmp", "fcmp"), (IntTypes, FloatingTypes), (CMP_FLAGS, FCMP_FLAGS))
+for (f, constraint, flags) in zip(("icmp", "fcmp"), (IntTypes, FloatingTypes), (CMP_FLAGS, FCMP_FLAGS))
     for flag in flags
         ftot = Symbol(string(f, "_", flag))
-        @eval @generated function $ftot(x::Vec{N, T}, y::Vec{N, T}) where {N, T <: $constraint}
+        @eval @generated function $ftot(x::LVec{N, T}, y::LVec{N, T}) where {N, T <: $constraint}
             fflag = $(QuoteNode(flag))
-            ff = $(QuoteNode(ftot))
+            ff = $(QuoteNode(f))
             s = """
             %3 = $ff $(fflag) <$(N) x $(d[T])> %0, %1
             %4 = zext <$(N) x i1> %3 to <$(N) x i8>
@@ -232,7 +231,7 @@ for (f, constraint, flags) in zip(("cmp", "fcmp"), (IntTypes, FloatingTypes), (C
             """
             return :(
                 $(Expr(:meta, :inline));
-                Base.llvmcall($s, Vec{N, Bool}, Tuple{Vec{N, T}, Vec{N, T}}, x, y)
+                Base.llvmcall($s, LVec{N, Bool}, Tuple{LVec{N, T}, LVec{N, T}}, x, y)
             )
         end
     end
@@ -264,11 +263,11 @@ const UNARY_INTRINSICS = [
 
 for f in UNARY_INTRINSICS
     @eval begin
-    @generated function $(f)(x::Vec{N, T}) where {N, T <: FloatingTypes}
+    @generated function $(f)(x::LVec{N, T}) where {N, T <: FloatingTypes}
         ff = llvm_name($(QuoteNode(f)), N, T)
         return :(
             $(Expr(:meta, :inline));
-            ccall($ff, llvmcall, Vec{N, T}, (Vec{N, T},), x)
+            ccall($ff, llvmcall, LVec{N, T}, (LVec{N, T},), x)
         )
     end
     end
@@ -289,11 +288,11 @@ const BINARY_INTRINSICS = [
 ]
 
 for f in BINARY_INTRINSICS
-    @eval @generated function $(f)(x::Vec{N, T}, y::Vec{N, T}) where {N, T <: FloatingTypes}
+    @eval @generated function $(f)(x::LVec{N, T}, y::LVec{N, T}) where {N, T <: FloatingTypes}
         ff = llvm_name($(QuoteNode(f)), N, T)
         return :(
             $(Expr(:meta, :inline));
-            ccall($ff, llvmcall, Vec{N, T}, (Vec{N, T}, Vec{N, T}), x, y)
+            ccall($ff, llvmcall, LVec{N, T}, (LVec{N, T}, LVec{N, T}), x, y)
         )
     end
 end
@@ -313,11 +312,11 @@ const BITMANIPULATION_INTRINSICS = [
 ]
 
 for f in BITMANIPULATION_INTRINSICS
-    @eval @generated function $(f)(x::Vec{N, T}) where {N, T <: IntegerTypes}
+    @eval @generated function $(f)(x::LVec{N, T}) where {N, T <: IntegerTypes}
         ff = llvm_name($(QuoteNode(f)), N, T)
         return :(
             $(Expr(:meta, :inline));
-            ccall(ff, llvmcall, Vec{N, T}, (Vec{N, T},), x)
+            ccall(ff, llvmcall, LVec{N, T}, (LVec{N, T},), x)
         )
     end
 end
@@ -326,7 +325,7 @@ end
 # Select #
 ##########
 
-@generated function select(cond::Vec{N, Bool}, x::Vec{N, T}, y::Vec{N, T}) where {N, T}
+@generated function select(cond::LVec{N, Bool}, x::LVec{N, T}, y::LVec{N, T}) where {N, T}
     s = """
     %cond = trunc <$(N) x i8> %0 to <$(N) x i1>
     %res = select <$N x i1> %cond, <$N x $(d[T])> %1, <$N x $(d[T])> %2
@@ -334,7 +333,7 @@ end
     """
     return :(
         $(Expr(:meta, :inline));
-        Base.llvmcall($s, Vec{N, T}, Tuple{Vec{N, Bool}, Vec{N, T}, Vec{N, T}}, cond, x, y)
+        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, Bool}, LVec{N, T}, LVec{N, T}}, cond, x, y)
     )
 end
 
@@ -348,11 +347,11 @@ const MULADD_INTRINSICS = [
 ]
 
 for f in MULADD_INTRINSICS
-    @eval @generated function $(f)(a::Vec{N, T}, b::Vec{N, T}, c::Vec{N, T}) where {N, T}
+    @eval @generated function $(f)(a::LVec{N, T}, b::LVec{N, T}, c::LVec{N, T}) where {N, T}
         ff = llvm_name($(QuoteNode(f)), N, T)
         return :(
             $(Expr(:meta, :inline));
-            ccall($ff, llvmcall, Vec{N, T}, (Vec{N, T}, Vec{N, T}, Vec{N, T}), a, b, c)
+            ccall($ff, llvmcall, LVec{N, T}, (LVec{N, T}, LVec{N, T}, LVec{N, T}), a, b, c)
         )
     end
 end
