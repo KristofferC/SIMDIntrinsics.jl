@@ -117,15 +117,27 @@ end
     )
 end
 
-@generated function shuffleLVector(x::LVec{N, T}, y::LVec{N, T}, ::Val{I}) where {N, T, I}
+@generated function shufflevector(x::LVec{N, T}, y::LVec{N, T}, ::Val{I}) where {N, T, I}
     shfl = join((string("i32 ", i) for i in I), ", ")
     s = """
-    %res = shuffleLVector <$N x $(d[T])> %0, <$N x $(d[T])> %1, <$N x i32> <$shfl>
+    %res = shufflevector <$N x $(d[T])> %0, <$N x $(d[T])> %1, <$N x i32> <$shfl>
     ret <$N x $(d[T])> %res
     """
     return :(
         $(Expr(:meta, :inline));
         Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}, LVec{N, T}}, x, y)
+    )
+end
+
+@generated function constantvector(v::T, y::Type{LVec{N, T}}) where {N, T}
+    s = """
+    %2 = insertelement <$N x $(d[T])> undef, $(d[T]) %0, i32 0
+    %res = shufflevector <$N x $(d[T])> %2, <$N x $(d[T])> undef, <$N x i32> zeroinitializer
+    ret <$N x $(d[T])> %res
+    """
+    return :(
+        $(Expr(:meta, :inline));
+        Base.llvmcall($s, LVec{N, T}, Tuple{T}, v)
     )
 end
 

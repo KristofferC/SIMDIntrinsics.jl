@@ -134,12 +134,20 @@ const BINARY_OPS = [
     (:(<=), FloatingTypes, LLVM.fcmp_ole)
 ]
 
-
 for (op, constraint, llvmop) in BINARY_OPS
     @eval function (Base.$op)(x::Vec{N, T}, y::Vec{N, T}) where {N, T <: $constraint}
         Vec($(llvmop)(x.data, y.data))
     end
+    @eval function (Base.$op)(x::T, y::Vec{N, T}) where {N, T <: $constraint}
+        Vec($(llvmop)(fill(x, Vec{N, T}).data, y.data))
+    end
+    @eval function (Base.$op)(x::Vec{N, T}, y::T) where {N, T <: $constraint}
+        Vec($(llvmop)(x.data, fill(y, Vec{N, T}).data))
+    end
 end
+
+# Base.fill(v, ::Type{Vec{N, T}}) where {N, T} = fill(convert(T, v), Vec{N, T})
+Base.fill(v::T, ::Type{Vec{N, T}}) where {N, T} = Vec(LLVM.constantvector(v, LLVM.LVec{N, T}))
 
 const UNARY_OPS = [
     (:sqrt, FloatingTypes, LLVM.sqrt),
