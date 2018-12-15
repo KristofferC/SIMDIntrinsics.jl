@@ -6,7 +6,7 @@ import ..SIMDIntrinsics: LLVM, VE, LVec, ScalarTypes, IntegerTypes, IntTypes, UI
 
 export Vec, vload, vstore
 
-struct Vec{N, T}
+struct Vec{N, T <: ScalarTypes}
     data::LVec{N, T}
 end
 Vec(v::NTuple{N, T}) where {N, T <: ScalarTypes} = Vec(VE.(v))
@@ -205,9 +205,7 @@ end
 @inline vstore(x::Vec{N, T}, ptr::Ptr{T}) where {N, T} = LLVM.store(x.data, ptr)
 @inline function vstore(x::Vec{N, T}, a::Array, i::Integer) where {N, T}
     @boundscheck checkbounds(a, i + N - 1)
-    GC.@preserve a begin
-        vstore(x, pointer(a, i))
-    end
+    vstore(x, pointer(a, i))
     return a
 end
 
