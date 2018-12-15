@@ -4,12 +4,16 @@ module SIMD
 
 import ..SIMDIntrinsics: LLVM, VE, LVec, ScalarTypes, IntegerTypes, IntTypes, UIntTypes, FloatingTypes, IndexTypes
 
+export Vec, vload, vstore
+
 struct Vec{N, T}
     data::LVec{N, T}
 end
 Vec(v::NTuple{N, T}) where {N, T <: ScalarTypes} = Vec(VE.(v))
 Vec(v::Vararg{T, N}) where {N, T <: ScalarTypes} = Vec(v)
 
+# Should promotion be supported?
+#=
 @inline function Base.promote_rule(::Type{Vec{N, T1}}, ::Type{Vec{N, T2}}) where {T1, T2, N}
     Vec{N, promote_type(T1, T2)}
 end
@@ -18,6 +22,7 @@ end
     return convert(promote_type(Vec{N, T1}, Vec{N, T2}), v1),
            convert(promote_type(Vec{N, T1}, Vec{N, T2}), v2)
 end
+=#
 
 # noop convert
 @inline Base.convert(::Type{Vec{N,T}}, v::Vec{N,T}) where {N,T} = v
@@ -87,6 +92,9 @@ function Base.setindex(x::Vec{N, T}, v, i::IntegerTypes) where {N, T}
     return LLVM.insertelement(x.data, T(v), i-1)
 end
 
+Base.zero(::Type{Vec{N, T}}) where {N, T} = fill(zero(T), Vec{N, T})
+Base.one(::Type{Vec{N, T}}) where {N, T} = fill(one(T), Vec{N, T})
+
 Base.reinterpret(::Type{Vec{N1, T1}}, v::Vec) where {T1, N1} = Vec(LLVM.bitcast(LLVM.LVec{N1, T1}, v.data))
 Base.reinterpret(::Type{T}, v::Vec) where {T} = Vec(LLVM.bitcast(T, v.data))
 
@@ -135,13 +143,13 @@ const BINARY_OPS = [
 ]
 
 for (op, constraint, llvmop) in BINARY_OPS
-    @eval function (Base.$op)(x::Vec{N, T}, y::Vec{N, T}) where {N, T <: $constraint}
+    @eval @inline function (Base.$op)(x::Vec{N, T}, y::Vec{N, T}) where {N, T <: $constraint}
         Vec($(llvmop)(x.data, y.data))
     end
-    @eval function (Base.$op)(x::T, y::Vec{N, T}) where {N, T <: $constraint}
+    @eval @inline function (Base.$op)(x::T, y::Vec{N, T}) where {N, T <: $constraint}
         Vec($(llvmop)(fill(x, Vec{N, T}).data, y.data))
     end
-    @eval function (Base.$op)(x::Vec{N, T}, y::T) where {N, T <: $constraint}
+    @eval @inline function (Base.$op)(x::Vec{N, T}, y::T) where {N, T <: $constraint}
         Vec($(llvmop)(x.data, fill(y, Vec{N, T}).data))
     end
 end
@@ -176,7 +184,7 @@ const UNARY_OPS = [
 ]
 
 for (op, constraint, llvmop) in UNARY_OPS
-    @eval function (Base.$op)(x::Vec{<:Any, <:$constraint})
+    @eval @inline function (Base.$op)(x::Vec{<:Any, <:$constraint})
         Vec($(llvmop)(x.data))
     end
 end
@@ -184,5 +192,23 @@ end
 Base.leading_ones(x::Vec{<:Any, <:IntegerTypes})  = leading_zeros(~(x))
 Base.trailing_ones(x::Vec{<:Any, <:IntegerTypes}) = trailing_zeros(~(x))
 Base.count_zeros(x::Vec{<:Any, <:IntegerTypes}) = count_zeros(~(x))
+
+
+@inline vload(::Type{Vec{N, T}}, ptr::Ptr{T}) where {N, T} = Vec(LLVM.load(LLVM.LVec{N, T}, ptr))
+@inline function vload(::Type{Vec{N, T}}, a::Array{T}, i::Integer) where {N, T}
+    @boundscheck checkbounds(a, i + N - 1)
+    GC.@preserve a begin
+        return vload(Vec{N, T}, pointer(a, i))
+    end
+end
+
+@inline vstore(x::Vec{N, T}, ptr::Ptr{T}) where {N, T} = LLVM.store(x.data, ptr)
+@inline function vstore(x::Vec{N, T}, a::Array, i::Integer) where {N, T}
+    @boundscheck checkbounds(a, i + N - 1)
+    GC.@preserve a begin
+        vstore(x, pointer(a, i))
+    end
+    return a
+end
 
 end
