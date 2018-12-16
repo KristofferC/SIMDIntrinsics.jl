@@ -118,6 +118,7 @@ end
 end
 
 @generated function shufflevector(x::LVec{N, T}, y::LVec{N, T}, ::Val{I}) where {N, T, I}
+    # Assert I < 2N?
     shfl = join((string("i32 ", i) for i in I), ", ")
     s = """
     %res = shufflevector <$N x $(d[T])> %0, <$N x $(d[T])> %1, <$N x i32> <$shfl>
@@ -126,6 +127,19 @@ end
     return :(
         $(Expr(:meta, :inline));
         Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}, LVec{N, T}}, x, y)
+    )
+end
+
+@generated function shufflevector(x::LVec{N, T}, ::Val{I}) where {N, T, I}
+    # Assert I < N?
+    shfl = join((string("i32 ", i) for i in I), ", ")
+    s = """
+    %res = shufflevector <$N x $(d[T])> %0, <$N x $(d[T])> undef, <$N x i32> <$shfl>
+    ret <$N x $(d[T])> %res
+    """
+    return :(
+        $(Expr(:meta, :inline));
+        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}}, x)
     )
 end
 

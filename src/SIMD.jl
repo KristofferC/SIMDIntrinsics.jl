@@ -193,7 +193,6 @@ Base.leading_ones(x::Vec{<:Any, <:IntegerTypes})  = leading_zeros(~(x))
 Base.trailing_ones(x::Vec{<:Any, <:IntegerTypes}) = trailing_zeros(~(x))
 Base.count_zeros(x::Vec{<:Any, <:IntegerTypes}) = count_zeros(~(x))
 
-
 @inline vload(::Type{Vec{N, T}}, ptr::Ptr{T}) where {N, T} = Vec(LLVM.load(LLVM.LVec{N, T}, ptr))
 @inline function vload(::Type{Vec{N, T}}, a::Array{T}, i::Integer) where {N, T}
     @boundscheck checkbounds(a, i + N - 1)
@@ -207,6 +206,13 @@ end
     @boundscheck checkbounds(a, i + N - 1)
     vstore(x, pointer(a, i))
     return a
+end
+
+@inline function shufflevector(x::Vec{N, T}, ::Val{I}) where {N, T, I}
+    LLVM.shufflevector(x.data, Val(I))
+end
+@inline function shufflevector(x::Vec{N, T}, y::Vec{N, T}, ::Val{I}) where {N, T, I}
+    LLVM.shufflevector(x.data, y.data, Val(I))
 end
 
 end
