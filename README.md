@@ -20,7 +20,7 @@ julia> v = LLVM.VE.((1, 2, 3, 4)) # VE short for VecElement
 julia> LLVM.add(v, v)
 (VecElement{Int64}(2), VecElement{Int64}(4), VecElement{Int64}(6), VecElement{Int64}(8))
 
-julia> LLVM.extractelement(v, 2)
+julia> LLVM.extractelement(v, 2) # zero indexed
 3
 
 julia> LLVM.icmp_eq(v, v)
