@@ -3,8 +3,9 @@
 module SIMD
 
 import ..SIMDIntrinsics: LLVM, VE, LVec, ScalarTypes, IntegerTypes, IntTypes, UIntTypes, FloatingTypes, IndexTypes
+import .LLVM: shufflevector
 
-export Vec, vload, vstore
+export Vec, vload, vstore, shufflevector
 
 struct Vec{N, T <: ScalarTypes}
     data::LVec{N, T}
@@ -89,14 +90,14 @@ end
 
 function Base.setindex(x::Vec{N, T}, v, i::IntegerTypes) where {N, T}
     @boundscheck checkbounds(x, i)
-    return LLVM.insertelement(x.data, T(v), i-1)
+    return Vec(LLVM.insertelement(x.data, T(v), i-1))
 end
 
 Base.zero(::Type{Vec{N, T}}) where {N, T} = fill(zero(T), Vec{N, T})
 Base.one(::Type{Vec{N, T}}) where {N, T} = fill(one(T), Vec{N, T})
 
 Base.reinterpret(::Type{Vec{N1, T1}}, v::Vec) where {T1, N1} = Vec(LLVM.bitcast(LLVM.LVec{N1, T1}, v.data))
-Base.reinterpret(::Type{T}, v::Vec) where {T} = Vec(LLVM.bitcast(T, v.data))
+Base.reinterpret(::Type{T}, v::Vec) where {T} = LLVM.bitcast(T, v.data)
 
 const BINARY_OPS = [
     (:+, IntegerTypes, LLVM.add)
@@ -208,11 +209,11 @@ end
     return a
 end
 
-@inline function shufflevector(x::Vec{N, T}, ::Val{I}) where {N, T, I}
-    LLVM.shufflevector(x.data, Val(I))
+@inline function LLVM.shufflevector(x::Vec{N, T}, ::Val{I}) where {N, T, I}
+    Vec(LLVM.shufflevector(x.data, Val(I)))
 end
-@inline function shufflevector(x::Vec{N, T}, y::Vec{N, T}, ::Val{I}) where {N, T, I}
-    LLVM.shufflevector(x.data, y.data, Val(I))
+@inline function LLVM.shufflevector(x::Vec{N, T}, y::Vec{N, T}, ::Val{I}) where {N, T, I}
+    Vec(LLVM.shufflevector(x.data, y.data, Val(I)))
 end
 
 end
