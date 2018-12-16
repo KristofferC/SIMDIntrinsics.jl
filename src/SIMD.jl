@@ -194,6 +194,9 @@ Base.leading_ones(x::Vec{<:Any, <:IntegerTypes})  = leading_zeros(~(x))
 Base.trailing_ones(x::Vec{<:Any, <:IntegerTypes}) = trailing_zeros(~(x))
 Base.count_zeros(x::Vec{<:Any, <:IntegerTypes}) = count_zeros(~(x))
 
+Base.muladd(a::Vec{N, T}, b::Vec{N, T}, c::Vec{N, T}) where {N,T} = Vec(LLVM.fmuladd(a.data, b.data, c.data))
+Base.fma(a::Vec{N, T}, b::Vec{N, T}, c::Vec{N, T}) where {N,T} = Vec(LLVM.fma(a.data, b.data, c.data))
+
 @inline vload(::Type{Vec{N, T}}, ptr::Ptr{T}) where {N, T} = Vec(LLVM.load(LLVM.LVec{N, T}, ptr))
 @inline function vload(::Type{Vec{N, T}}, a::Array{T}, i::Integer) where {N, T}
     @boundscheck checkbounds(a, i + N - 1)
