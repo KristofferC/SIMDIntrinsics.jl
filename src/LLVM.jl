@@ -241,10 +241,11 @@ end
 # Comparisons #
 ###############
 
-const CMP_FLAGS = [:eq ,:ne ,:ugt ,:uge ,:ult ,:ule ,:sgt ,:sge ,:slt ,:sle]
+const S_CMP_FLAGS = [:eq ,:ne, :sgt ,:sge ,:slt ,:sle]
+const U_CMP_FLAGS = [:eq ,:ne ,:ugt ,:uge ,:ult ,:ule]
 const FCMP_FLAGS = [:false ,:oeq ,:ogt ,:oge ,:olt ,:ole ,:one ,:ord ,:ueq ,:ugt ,:uge ,:ult ,:ule ,:une ,:uno , :true]
 
-for (f, constraint, flags) in zip(("icmp", "fcmp"), (IntTypes, FloatingTypes), (CMP_FLAGS, FCMP_FLAGS))
+for (f, constraint, flags) in zip(("icmp", "icmp", "fcmp"), (IntTypes, UIntTypes, FloatingTypes), (S_CMP_FLAGS, U_CMP_FLAGS, FCMP_FLAGS))
     for flag in flags
         ftot = Symbol(string(f, "_", flag))
         @eval @generated function $ftot(x::LVec{N, T}, y::LVec{N, T}) where {N, T <: $constraint}
