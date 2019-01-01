@@ -22,7 +22,14 @@ const d = Dict{DataType, String}(
     #Float16 => "half",
     Float32 => "float",
     Float64 => "double",
+    Ptr{Float64} => "i64"
 )
+
+
+# TODO: Clean up
+suffix(N::Integer, ::Type{Ptr{T}}) where {T} = "v$(N)p0$(T<:IntegerTypes ? "i" : "f")$(8*sizeof(T))"
+suffix(N::Integer, ::Type{T}) where {T} = "v$(N)$(T<:IntegerTypes ? "i" : "f")$(8*sizeof(T))"
+llvm_name(llvmf, N, T) = string("llvm", ".", llvmf, ".", suffix(N, T))
 
 #####################
 # Binary operators  #
@@ -90,10 +97,47 @@ end
     )
 end
 
+####################
+# Gather / Scatter #
+####################
 
-#####################
+@generated function maskedgather(::Type{LVec{N, T}}, ptrs::Union{LVec{N, Ptr{T}}, LVec{N, Int}}) where {N, T}
+    # TODO: Allow setting the mask
+    # TODO: Allow setting the passthru
+    decl = "declare <$N x $(d[T])> @llvm.masked.gather.$(suffix(N, T))(<$N x $(d[T])*>, i32, <$N x i1>, <$N x $(d[T])>)"
+    mask = join(("i1 true" for i in 1:N), ", ")
+
+    s = """
+    %ptrs = inttoptr <$N x $(d[Int])> %0 to <$N x $(d[T])*>
+    %res = call <$N x $(d[T])> @llvm.masked.gather.$(suffix(N, T))(<$N x $(d[T])*> %ptrs, i32 8, <$N x i1> <$mask>, <$N x $(d[T])> undef)
+    ret <$N x $(d[T])> %res
+    """
+    return :(
+        $(Expr(:meta, :inline));
+        Base.llvmcall(($decl, $s), LVec{N, T}, Tuple{typeof(ptrs)}, ptrs)
+    )
+end
+
+@generated function maskedscatter(x::LVec{N, T}, ptrs::Union{LVec{N, Int}, LVec{N, Ptr{T}}}) where {N, T}
+    # TODO: Allow setting the mask
+    mask = join(("i1 true " for i in 1:N), ", ")
+    decl = "declare <$N x $(d[T])> @llvm.masked.scatter.$(suffix(N, T))(<$N x $(d[T])>, <$N x $(d[T])*>, i32, <$N x i1>)"
+
+    s = """
+    %ptrs = inttoptr <$N x $(d[Int])> %1 to <$N x $(d[T])*>
+    call <$N x $(d[T])> @llvm.masked.scatter.$(suffix(N, T))(<$N x $(d[T])> %0, <$N x $(d[T])*> %ptrs, i32 8, <$N x i1> <$mask>)
+    ret void
+    """
+    return :(
+        $(Expr(:meta, :inline));
+        Base.llvmcall(($decl, $s), Cvoid, Tuple{LVec{N, T}, typeof(ptrs)}, x, ptrs)
+    )
+end
+
+
+######################
 # LVector Operations #
-#####################
+######################
 
 @generated function extractelement(x::LVec{N, T}, i::I) where {N, T, I <: IntTypes}
     s = """
@@ -268,9 +312,6 @@ end
 # Unary operators  #
 ####################
 
-suffix(N::Integer, T::Type) = "v$(N)$(T<:IntegerTypes ? "i" : "f")$(8*sizeof(T))"
-llvm_name(llvmf, N, T) = string("llvm", ".", llvmf, ".", suffix(N, T))
-
 const UNARY_INTRINSICS = [
     :sqrt
     :sin
@@ -353,7 +394,7 @@ end
     shfl = join((string(d[T], " ", -1) for i in 1:N), ", ")
     s = """
     %res = xor <$N x $(d[T])> %0, <$shfl>
-    ret <$N x $(d[T])> %res
+    ret <$N x $(d[T])> %refor (k, v) in ds
     """
     return :(
         $(Expr(:meta, :inline));

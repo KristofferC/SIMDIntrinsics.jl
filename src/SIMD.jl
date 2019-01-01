@@ -5,7 +5,7 @@ module SIMD
 import ..SIMDIntrinsics: LLVM, VE, LVec, ScalarTypes, IntegerTypes, IntTypes, UIntTypes, FloatingTypes, IndexTypes
 import .LLVM: shufflevector
 
-export Vec, vload, vstore, shufflevector
+export Vec, vload, vstore, vgather, vscatter, vload, shufflevector
 
 struct Vec{N, T <: ScalarTypes}
     data::LVec{N, T}
@@ -206,7 +206,7 @@ Base.fma(a::Vec{N, T}, b::Vec{N, T}, c::Vec{N, T}) where {N,T} = Vec(LLVM.fma(a.
 end
 
 @inline vstore(x::Vec{N, T}, ptr::Ptr{T}) where {N, T} = LLVM.store(x.data, ptr)
-@inline function vstore(x::Vec{N, T}, a::Array, i::Integer) where {N, T}
+@inline function vstore(x::Vec{N, T}, a::Array{T}, i::Integer) where {N, T}
     @boundscheck checkbounds(a, i + N - 1)
     vstore(x, pointer(a, i))
     return a
@@ -217,6 +217,29 @@ end
 end
 @inline function LLVM.shufflevector(x::Vec{N, T}, y::Vec{N, T}, ::Val{I}) where {N, T, I}
     Vec(LLVM.shufflevector(x.data, y.data, Val(I)))
+end
+
+@inline function vgather(a::Array{T}, group_lane::Vec{N, Int}) where {N, T}
+    @boundscheck for i in 1:N
+        checkbounds(a, @inbounds group_lane[i])
+    end
+    p = fill(Int(pointer(a)), Vec{N, Int})
+    ptrs = p + (group_lane - 1) * sizeof(T)
+    GC.@preserve a begin
+        return Vec(LLVM.maskedgather(LLVM.LVec{N, T}, ptrs.data))
+    end
+end
+
+@inline function vscatter(a::Array{T}, x::Vec{N, T}, group_lane::Vec{N, Int}) where {N, T}
+    @boundscheck for i in 1:N
+        checkbounds(a, @inbounds group_lane[i])
+    end
+    p = fill(Int(pointer(a)), Vec{N, Int})
+    ptrs = p + (group_lane - 1) * sizeof(T)
+    GC.@preserve a begin
+        LLVM.maskedscatter(x.data, ptrs.data)
+    end
+    return
 end
 
 end
