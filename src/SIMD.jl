@@ -2,8 +2,10 @@
 
 module SIMD
 
-import ..SIMDIntrinsics: LLVM, VE, LVec, ScalarTypes, IntegerTypes, IntTypes, UIntTypes, FloatingTypes, IndexTypes
+import ..SIMDIntrinsics: LLVM, VE, LVec, ScalarTypes, IntegerTypes, IntTypes, UIntTypes, FloatingTypes
 import .LLVM: shufflevector
+
+using Base: @propagate_inbounds
 
 export Vec, vload, vstore, vgather, vscatter, vload, shufflevector
 
@@ -27,6 +29,10 @@ end
 
 # noop convert
 @inline Base.convert(::Type{Vec{N,T}}, v::Vec{N,T}) where {N,T} = v
+
+# 
+Base.Tuple(v::Vec) = map(i -> i.value, v.data)
+Base.NTuple{N, T}(v::Vec{N}) where {T, N} = map(i -> convert(T, i.value), v.data)
 
 # No checks for underflow or overflow!
 @inline function Base.convert(::Type{Vec{N, T1}}, v::Vec{N, T2}) where {T1, T2, N}
@@ -81,16 +87,28 @@ function Base.show(io::IO, v::Vec{N,T}) where {N,T}
     print(io, "]")
 end
 
-@inline Base.checkbounds(v::Vec, i::IntegerTypes) = i <= 0 || i > length(v.data) && Base.throw_boundserror(v, i)
+@inline Base.checkbounds(v::Vec, i::IntegerTypes) =
+(i < 1 || i > length(v.data)) && Base.throw_boundserror(v, i)
 
 function Base.getindex(v::Vec, i::IntegerTypes)
     @boundscheck checkbounds(v, i)
     return LLVM.extractelement(v.data, i-1)
 end
 
-function Base.setindex(x::Vec{N, T}, v, i::IntegerTypes) where {N, T}
-    @boundscheck checkbounds(x, i)
-    return Vec(LLVM.insertelement(x.data, T(v), i-1))
+@propagate_inbounds Base.getindex(v::Vec, ::Val{i}) where {i} = v[i]
+@propagate_inbounds Base.getindex(v::Vec, ::Type{Val{i}}) where {i} = v[i]
+
+@inline function Base.setindex(v::Vec{N,T}, x, i::IntegerTypes) where {N,T}
+    @boundscheck checkbounds(v, i)
+    Vec(LLVM.insertelement(v.data, convert(T, x), i-1))
+end
+
+function Base.setindex(v::Vec{N, T}, x, ::Val{i}) where {N,T,i} 
+    @boundscheck checkbounds(v, i)
+    Vec(LLVM.insertelement(v.data, convert(T, x), Val(i)))
+end
+@propagate_inbounds function Base.setindex(v::Vec, x, ::Type{Val{i}}) where {i}
+    Base.setindex(v, x, Val(i))
 end
 
 Base.zero(::Type{Vec{N, T}}) where {N, T} = fill(zero(T), Vec{N, T})
@@ -155,7 +173,6 @@ for (op, constraint, llvmop) in BINARY_OPS
     end
 end
 
-# Base.fill(v, ::Type{Vec{N, T}}) where {N, T} = fill(convert(T, v), Vec{N, T})
 Base.fill(v::T, ::Type{Vec{N, T}}) where {N, T} = Vec(LLVM.constantvector(v, LLVM.LVec{N, T}))
 
 const UNARY_OPS = [
@@ -185,10 +202,29 @@ const UNARY_OPS = [
 ]
 
 for (op, constraint, llvmop) in UNARY_OPS
-    @eval @inline function (Base.$op)(x::Vec{<:Any, <:$constraint})
+    @eval @inline (Base.$op)(x::Vec{<:Any, <:$constraint}) = 
         Vec($(llvmop)(x.data))
-    end
 end
+
+##############
+# Reductions #
+##############
+const HORZ_REDUCTION_OPS = [
+    (&, IntegerTypes, LLVM.reduce_and)
+    (|, IntegerTypes, LLVM.reduce_and)
+    (max, IntTypes, LLVM.reduce_smax)
+    (max, UIntTypes,LLVM.reduce_umax)
+    (max, FloatingTypes, LLVM.reduce_fmax)
+    (min, IntTypes, LLVM.reduce_smin)
+    (min, UIntTypes, LLVM.reduce_umin)
+    (min, FloatingTypes, LLVM.reduce_fmin)
+]
+
+for (op, constraint, llvmop) in HORZ_REDUCTION_OPS
+    @eval @inline (Base.reduce)(::typeof($op), x::Vec{<:Any, <:$constraint}) =
+        $(llvmop)(x.data)
+end
+reduce(::typeof(F), v::Vec) where {F} = error("reduction not defined for SIMD.Vec on $F")
 
 Base.leading_ones(x::Vec{<:Any, <:IntegerTypes})  = leading_zeros(~(x))
 Base.trailing_ones(x::Vec{<:Any, <:IntegerTypes}) = trailing_zeros(~(x))
@@ -241,5 +277,6 @@ end
     end
     return
 end
+
 
 end

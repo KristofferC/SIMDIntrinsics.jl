@@ -157,7 +157,18 @@ end
     """
     return :(
         $(Expr(:meta, :inline));
-        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}, T, $i}, x, v, i)
+        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}, T, typeof(i)}, x, v, i)
+    )
+end
+
+@generated function insertelement(x::LVec{N, T}, v::T, ::Val{i}) where {N, T, i}
+    s = """
+    %3 = insertelement <$N x $(d[T])> %0, $(d[T]) %1, $(d[Int]) $(i-1)
+    ret <$N x $(d[T])> %3
+    """
+    return :(
+        $(Expr(:meta, :inline));
+        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}, T}, x, v)
     )
 end
 
@@ -437,5 +448,35 @@ for f in MULADD_INTRINSICS
         )
     end
 end
+
+#########################
+# Horizontal reductions #
+#########################
+
+const HORZ_REDUCTION_OPS = [
+    (:and, :and)
+    (:or, :or)
+    (:smax, :umax, :fmax)
+    (:smin, :umin, :fmin)
+]
+
+for fs in HORZ_REDUCTION_OPS
+    for (f, constraint) in zip(fs, (IntTypes, UIntTypes, FloatingTypes))
+        f_red = Symbol("reduce_", f)
+        @eval @generated function $f_red(x::LVec{N, T}) where {N,T<:$constraint}
+            ff = llvm_name(string("experimental.vector.reduce.", $(QuoteNode(f))), N, T)
+            decl = "declare $(d[T]) @$ff(<$N x $(d[T])>)"
+            s2 = """
+            %res = call $(d[T]) @$ff(<4 x $(d[T])> %0)
+            ret $(d[T]) %res
+            """
+            return quote
+                Base.llvmcall($(decl, s2), T, Tuple{LVec{4, T},}, x)
+            end
+        end
+    end
+end
+
+# zero_lit(T) = T <: Integer ? "0" : "0.0"
 
 end
