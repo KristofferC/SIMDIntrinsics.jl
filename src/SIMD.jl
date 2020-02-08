@@ -218,18 +218,29 @@ const HORZ_REDUCTION_OPS = [
     (min, IntTypes, LLVM.reduce_smin)
     (min, UIntTypes, LLVM.reduce_umin)
     (min, FloatingTypes, LLVM.reduce_fmin)
+    (*, IntegerTypes, LLVM.reduce_mul)
+    (+, IntegerTypes, LLVM.reduce_add)
 ]
 
 for (op, constraint, llvmop) in HORZ_REDUCTION_OPS
-    @eval @inline (Base.reduce)(::typeof($op), x::Vec{<:Any, <:$constraint}) =
+    @eval @inline Base.reduce(::typeof($op), x::Vec{<:Any, <:$constraint}) =
         $(llvmop)(x.data)
 end
-reduce(::typeof(F), v::Vec) where {F} = error("reduction not defined for SIMD.Vec on $F")
+Base.reduce(F::Any, v::Vec) = error("reduction not defined for SIMD.Vec on $F")
 
+@inline Base.all(v::Vec{<:Any,Bool}) = reduce(&, v)
+@inline Base.any(v::Vec{<:Any,Bool}) = reduce(|, v)
+@inline Base.maximum(v::Vec) = reduce(max, v)
+@inline Base.minimum(v::Vec) = reduce(min, v)
+@inline Base.prod(v::Vec) = reduce(*, v)
+@inline Base.sum(v::Vec) = reduce(+, v)
+
+# Various bit counts defined in terms of others
 Base.leading_ones(x::Vec{<:Any, <:IntegerTypes})  = leading_zeros(~(x))
 Base.trailing_ones(x::Vec{<:Any, <:IntegerTypes}) = trailing_zeros(~(x))
 Base.count_zeros(x::Vec{<:Any, <:IntegerTypes}) = count_zeros(~(x))
 
+# Muladd
 Base.muladd(a::Vec{N, T}, b::Vec{N, T}, c::Vec{N, T}) where {N,T} = Vec(LLVM.fmuladd(a.data, b.data, c.data))
 Base.fma(a::Vec{N, T}, b::Vec{N, T}, c::Vec{N, T}) where {N,T} = Vec(LLVM.fma(a.data, b.data, c.data))
 

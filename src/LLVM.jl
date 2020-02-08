@@ -456,6 +456,8 @@ end
 const HORZ_REDUCTION_OPS = [
     (:and, :and)
     (:or, :or)
+    (:mul, :mul)
+    (:add, :add)
     (:smax, :umax, :fmax)
     (:smin, :umin, :fmin)
 ]
@@ -476,6 +478,7 @@ for fs in HORZ_REDUCTION_OPS
         end
     end
 end
+
 
 # zero_lit(T) = T <: Integer ? "0" : "0.0"
 
