@@ -218,8 +218,10 @@ const HORZ_REDUCTION_OPS = [
     (min, IntTypes, LLVM.reduce_smin)
     (min, UIntTypes, LLVM.reduce_umin)
     (min, FloatingTypes, LLVM.reduce_fmin)
-    (*, IntegerTypes, LLVM.reduce_mul)
     (+, IntegerTypes, LLVM.reduce_add)
+    (*, IntegerTypes, LLVM.reduce_mul)
+    (+, FloatingTypes, LLVM.reduce_fadd)
+    (*, FloatingTypes, LLVM.reduce_fmul)
 ]
 
 for (op, constraint, llvmop) in HORZ_REDUCTION_OPS

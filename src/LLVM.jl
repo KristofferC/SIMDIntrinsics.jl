@@ -479,7 +479,22 @@ for fs in HORZ_REDUCTION_OPS
     end
 end
 
-
-# zero_lit(T) = T <: Integer ? "0" : "0.0"
+# The fadd and fmul reductions take an initializer
+# LLVM docs say these are called ‘llvm.experimental.vector.reduce.v2.fmul.*``
+# That seems to not be true (no v2 below)
+for (f, neutral) in [(:fadd, "0.0"), (:fmul, "1.0")]
+    f_red = Symbol("reduce_", f)
+    @eval @generated function $f_red(x::LVec{N, T}) where {N,T<:FloatingTypes}
+        ff = llvm_name(string("experimental.vector.reduce.", $(QuoteNode(f))), N, T)
+        decl = "declare $(d[T]) @$ff($(d[T]), <$N x $(d[T])>)"
+        s2 = """
+        %res = call $(d[T]) @$ff($(d[T]) $($neutral), <4 x $(d[T])> %0)
+        ret $(d[T]) %res
+        """
+        return quote
+            Base.llvmcall($(decl, s2), T, Tuple{LVec{4, T},}, x)
+        end
+    end
+end
 
 end
