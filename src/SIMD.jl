@@ -111,8 +111,10 @@ end
     Base.setindex(v, x, Val(i))
 end
 
-Base.zero(::Type{Vec{N, T}}) where {N, T} = fill(zero(T), Vec{N, T})
-Base.one(::Type{Vec{N, T}}) where {N, T} = fill(one(T), Vec{N, T})
+Base.zero(::Type{Vec{N,T}}) where {N, T} = fill(zero(T), Vec{N, T})
+Base.zero(::Vec{N,T}) where {N, T} = zero(Vec{N, T})
+Base.one(::Type{Vec{N,T}}) where {N, T} = fill(one(T), Vec{N, T})
+Base.one(::Vec{N,T}) where {N, T} = one(Vec{N, T})
 
 Base.reinterpret(::Type{Vec{N1, T1}}, v::Vec) where {T1, N1} = Vec(LLVM.bitcast(LLVM.LVec{N1, T1}, v.data))
 Base.reinterpret(::Type{T}, v::Vec) where {T} = LLVM.bitcast(T, v.data)
@@ -129,6 +131,7 @@ const BINARY_OPS = [
     (:+, FloatingTypes, LLVM.fadd)
     (:-, FloatingTypes, LLVM.fsub)
     (:*, FloatingTypes, LLVM.fmul)
+    (:^, FloatingTypes, LLVM.pow)
     (:/, IntegerTypes, LLVM.fdiv)
     (:rem, IntegerTypes, LLVM.frem)
 
@@ -174,6 +177,21 @@ for (op, constraint, llvmop) in BINARY_OPS
 end
 
 Base.fill(v::T, ::Type{Vec{N, T}}) where {N, T} = Vec(LLVM.constantvector(v, LLVM.LVec{N, T}))
+
+
+# Pow
+@inline Base.:^(x::Vec{N,T}, y::IntegerTypes) where {N,T<:FloatingTypes} =
+    Vec(LLVM.powi(x.data, y))
+
+@inline Base.literal_pow(::typeof(^), x::Vec{Any, <:FloatingTypes}, ::Val{0}) = one(typeof(x))
+@inline Base.literal_pow(::typeof(^), x::Vec{Any, <:FloatingTypes}, ::Val{1}) = x
+@inline Base.literal_pow(::typeof(^), x::Vec{Any, <:FloatingTypes}, ::Val{2}) = x*x
+@inline Base.literal_pow(::typeof(^), x::Vec{Any, <:FloatingTypes}, ::Val{3}) = x*x*x
+
+
+#########
+# Unary #
+#########
 
 const UNARY_OPS = [
     (:sqrt, FloatingTypes, LLVM.sqrt),

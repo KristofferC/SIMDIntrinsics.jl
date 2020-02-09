@@ -358,6 +358,7 @@ const BINARY_INTRINSICS = [
     :minimum,
     :maximum,
     :copysign,
+    :pow,
     :floor,
     :ceil,
     :trunc,
@@ -375,6 +376,19 @@ for f in BINARY_INTRINSICS
         )
     end
 end
+
+# pow, powi
+for (f, constraint) in [(:pow, FloatingTypes), (:powi, IntegerTypes)]
+    @eval @generated function $(f)(x::LVec{N, T1}, y::T2) where {N, T1 <: FloatingTypes, T2 <: $constraint}
+        ff = llvm_name($(QuoteNode(f)), N, T1)
+        return :(
+            $(Expr(:meta, :inline));
+            ccall($ff, llvmcall, LVec{N, T1}, (LVec{N, T1}, T2), x, y)
+        )
+    end
+
+end
+
 
 ####################
 # Bit manipulation #
