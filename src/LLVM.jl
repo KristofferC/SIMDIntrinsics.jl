@@ -419,7 +419,7 @@ end
     shfl = join((string(d[T], " ", -1) for i in 1:N), ", ")
     s = """
     %res = xor <$N x $(d[T])> %0, <$shfl>
-    ret <$N x $(d[T])> %refor (k, v) in ds
+    ret <$N x $(d[T])> %res
     """
     return :(
         $(Expr(:meta, :inline));

@@ -14,6 +14,9 @@ struct Vec{N, T <: ScalarTypes}
 end
 Vec(v::NTuple{N, T}) where {N, T <: ScalarTypes} = Vec(VE.(v))
 Vec(v::Vararg{T, N}) where {N, T <: ScalarTypes} = Vec(v)
+Vec(v::Vec) = v
+Vec{N, T}(v::Vec{N, T}) where {N, T<:ScalarTypes} = v
+Vec{N, T1}(v::Vec{N, T2}) where {N, T1<:ScalarTypes, T2<:ScalarTypes} = convert(Vec{N, T1}, v)
 
 # Should promotion be supported?
 #=
@@ -178,6 +181,18 @@ end
 
 Base.fill(v::T, ::Type{Vec{N, T}}) where {N, T} = Vec(LLVM.constantvector(v, LLVM.LVec{N, T}))
 
+@inline vifelse(v::Bool, v1::Vec{N, T}, v2::Vec{N, T}) where {N, T} = ifelse(v, v1, v2)
+@inline vifelse(v::Vec{N, Bool}, v1::Vec{N, T}, v2::Vec{N, T}) where {N, T} =
+    Vec(LLVM.select(v.data, v1.data, v2.data))
+
+@inline Base.max(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T<:IntegerTypes} =
+    Vec(vifelse(v1 >= v2, v1, v2))
+@inline Base.min(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T<:IntegerTypes} =
+    Vec(vifelse(v1 >= v2, v2, v1))
+
+@inline Base.sign(v1::Vec{N,T}) where {N,T<:IntTypes} =
+    vifelse(v1 == zero(Vec{N,T}), zero(Vec{N,T}),
+            vifelse(v1 < zero(Vec{N,T}), -one(Vec{N,T}), one(Vec{N,T})))
 
 # Pow
 @inline Base.:^(x::Vec{N,T}, y::IntegerTypes) where {N,T<:FloatingTypes} =
@@ -224,6 +239,12 @@ for (op, constraint, llvmop) in UNARY_OPS
         Vec($(llvmop)(x.data))
 end
 
+Base.:+(v::Vec) = v
+Base.:-(v::Vec) = zero(v) - v
+Base.abs(v::Vec{N, T}) where {N, T} = Vec(vifelse(v < zero(T), -v, v))
+Base.:!(v1::Vec{N,Bool}) where {N} = ~v1
+
+
 ##############
 # Reductions #
 ##############
@@ -256,9 +277,17 @@ Base.reduce(F::Any, v::Vec) = error("reduction not defined for SIMD.Vec on $F")
 @inline Base.sum(v::Vec) = reduce(+, v)
 
 # Various bit counts defined in terms of others
-Base.leading_ones(x::Vec{<:Any, <:IntegerTypes})  = leading_zeros(~(x))
-Base.trailing_ones(x::Vec{<:Any, <:IntegerTypes}) = trailing_zeros(~(x))
-Base.count_zeros(x::Vec{<:Any, <:IntegerTypes}) = count_zeros(~(x))
+@inline Base.signbit(x::Vec{<:Any, <:IntegerTypes})  = x < zero(x)
+@inline Base.leading_ones(x::Vec{<:Any, <:IntegerTypes})  = leading_zeros(~(x))
+@inline Base.trailing_ones(x::Vec{<:Any, <:IntegerTypes}) = trailing_zeros(~(x))
+@inline Base.count_zeros(x::Vec{<:Any, <:IntegerTypes}) = count_zeros(~(x))
+
+@inline Base.copysign(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T<:IntTypes} =
+    vifelse(signbit(v2), -abs(v1), abs(v1))
+@inline Base.copysign(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T<:UIntTypes} = v1
+@inline Base.flipsign(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T<:IntTypes} =
+    vifelse(signbit(v2), -v1, v1)
+@inline Base.flipsign(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T<:UIntTypes} = v1
 
 # Muladd
 Base.muladd(a::Vec{N, T}, b::Vec{N, T}, c::Vec{N, T}) where {N,T} = Vec(LLVM.fmuladd(a.data, b.data, c.data))
@@ -275,7 +304,9 @@ end
 @inline vstore(x::Vec{N, T}, ptr::Ptr{T}) where {N, T} = LLVM.store(x.data, ptr)
 @inline function vstore(x::Vec{N, T}, a::Array{T}, i::Integer) where {N, T}
     @boundscheck checkbounds(a, i + N - 1)
-    vstore(x, pointer(a, i))
+    GC.@preserve a begin
+        vstore(x, pointer(a, i))
+    end
     return a
 end
 
