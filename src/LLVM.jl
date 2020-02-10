@@ -41,17 +41,18 @@ llvm_name(llvmf, N, T) = string("llvm", ".", llvmf, ".", suffix(N, T))
 
 # (signed, unsigned, float)
 const BINARY_OPS = [
-    (:add, :add, :fadd),
-    (:sub, :sub, :fsub),
-    (:mul, :mul, :fmul),
-    (:sdiv, :udiv, :fdiv),
-    (:srem, :urem, :frem),
+    (:add, :add, :fadd)
+    (:sub, :sub, :fsub)
+    (:mul, :mul, :fmul)
+    (:sdiv, :udiv, :fdiv)
+    (:srem, :urem, :frem)
     # Bitwise
-    (:shl, :shl),
-    (:ashr, :lshr),
-    (:and, :and),
-    (:or, :or,),
-    (:xor, :xor),
+    (:shl, :shl)
+    (:ashr, :ashr)
+    (:lshr, :lshr)
+    (:and, :and)
+    (:or, :or,)
+    (:xor, :xor)
 ]
 
 for fs in BINARY_OPS
@@ -161,17 +162,6 @@ end
     )
 end
 
-@generated function insertelement(x::LVec{N, T}, v::T, ::Val{i}) where {N, T, i}
-    s = """
-    %3 = insertelement <$N x $(d[T])> %0, $(d[T]) %1, $(d[Int]) $(i-1)
-    ret <$N x $(d[T])> %3
-    """
-    return :(
-        $(Expr(:meta, :inline));
-        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}, T}, x, v)
-    )
-end
-
 _shuffle_vec(I) = join((string("i32 ", i == :undef ? "undef" : Int32(i::Integer)) for i in I), ", ")
 @generated function shufflevector(x::LVec{N, T}, y::LVec{N, T}, ::Val{I}) where {N, T, I}
     shfl = _shuffle_vec(I)
@@ -217,13 +207,13 @@ end
 # Conversions
 
 const CONVERSION_OPS_SIZE_CHANGE_SAME_ELEMENTS = [
-    ((:trunc, :trunc, :fptrunc), >),
-    ((:zext, :zext,   :fpext),   <),
-    ((:sext, :sext),             <),
+    ((:trunc, :fptrunc), >),
+    ((:zext,  :fpext),   <),
+    ((:sext, ),             <),
 ]
 
 for (fs, criteria) in CONVERSION_OPS_SIZE_CHANGE_SAME_ELEMENTS
-    for (f, constraint) in zip(fs, (IntTypes, UIntTypes, FloatingTypes))
+    for (f, constraint) in zip(fs, (IntegerTypes, FloatingTypes))
         @eval @generated function $f(::Type{LVec{N, T2}}, x::LVec{N, T1}) where {N, T1 <: $constraint, T2 <: $constraint}
             sT1, sT2 = sizeof(T1) * 8, sizeof(T2) * 8
             @assert $criteria(sT1, sT2) "size of conversion type ($T2: $sT2) must be $($criteria) than the element type ($T1: $sT1)"
@@ -469,9 +459,8 @@ const MULADD_INTRINSICS = [
     :fma,
 ]
 
-# Problem with muladd?????
 for f in MULADD_INTRINSICS
-    @eval @generated function $(f)(a::LVec{N, T}, b::LVec{N, T}, c::LVec{N, T}) where {N, T}
+    @eval @generated function $(f)(a::LVec{N, T}, b::LVec{N, T}, c::LVec{N, T}) where {N, T<:FloatingTypes}
         ff = llvm_name($(QuoteNode(f)), N, T)
         return :(
             $(Expr(:meta, :inline));

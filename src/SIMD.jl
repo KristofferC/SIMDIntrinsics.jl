@@ -70,16 +70,16 @@ Base.NTuple{N, T}(v::Vec{N}) where {T, N} = map(i -> convert(T, i.value), v.data
             end
         end
     end
-    error("unreachable")
+    _unreachable()
 end
+@noinline _unreachable() = error("unreachable")
 
 
 Base.eltype(::Type{Vec{N,T}}) where {N,T} = T
 Base.ndims( ::Type{Vec{N,T}}) where {N,T} = 1
 Base.length(::Type{Vec{N,T}}) where {N,T} = N
 Base.size(  ::Type{Vec{N,T}}) where {N,T} = (N,)
-# TODO: This doesn't follow Base, e.g. `size([], 3) == 1`
-Base.size(::Type{Vec{N,T}}, n::Integer) where {N,T} = (N,)[n]
+Base.size(  ::Type{Vec{N,T}}, n::Integer) where {N,T} = n > N ? 1 : (N,)[n]
 
 Base.eltype(V::Vec) = eltype(typeof(V))
 Base.ndims( V::Vec) = ndims(typeof(V))
@@ -101,20 +101,9 @@ function Base.getindex(v::Vec, i::IntegerTypes)
     return LLVM.extractelement(v.data, i-1)
 end
 
-@propagate_inbounds Base.getindex(v::Vec, ::Val{i}) where {i} = v[i]
-@propagate_inbounds Base.getindex(v::Vec, ::Type{Val{i}}) where {i} = v[i]
-
 @inline function Base.setindex(v::Vec{N,T}, x, i::IntegerTypes) where {N,T}
     @boundscheck checkbounds(v, i)
     Vec(LLVM.insertelement(v.data, convert(T, x), i-1))
-end
-
-function Base.setindex(v::Vec{N, T}, x, ::Val{i}) where {N,T,i}
-    @boundscheck checkbounds(v, i)
-    Vec(LLVM.insertelement(v.data, convert(T, x), Val(i)))
-end
-@propagate_inbounds function Base.setindex(v::Vec, x, ::Type{Val{i}}) where {i}
-    Base.setindex(v, x, Val(i))
 end
 
 Base.zero(::Type{Vec{N,T}}) where {N, T} = fill(zero(T), Vec{N, T})
@@ -124,19 +113,6 @@ Base.one(::Vec{N,T}) where {N, T} = one(Vec{N, T})
 
 Base.reinterpret(::Type{Vec{N, T}}, v::Vec) where {T, N} = Vec(LLVM.bitcast(LLVM.LVec{N, T}, v.data))
 Base.reinterpret(::Type{T}, v::Vec) where {T} = LLVM.bitcast(T, v.data)
-#=
-Base.reinterpret(::Type{Vec{N, Unsigned}}, v::Vec{N, Float64}) where {N} = reinterpret(Vec{N, UInt64}, v)
-Base.reinterpret(::Type{Vec{N, Unsigned}}, v::Vec{N, Float32}) where {N} = reinterpret(Vec{N, UInt32}, v)
-Base.reinterpret(::Type{Vec{N, Signed}}, v::Vec{N, Float64}) where {N} = reinterpret(Vec{N, Int64}, v)
-Base.reinterpret(::Type{Vec{N, Signed}}, v::Vec{N, Float32}) where {N} = reinterpret(Vec{N, Int32}, v)
-=#
-
-#=
-Base.reinterpret(::Type{Unsigned}, x::Vec{<:Any, Float64}) = reinterpret(UInt64, x)
-Base.reinterpret(::Type{Unsigned}, x::Vec{<:Any, Float32}) = reinterpret(UInt32, x)
-Base.reinterpret(::Type{Signed}, x::Vec{<:Any, Float64}) = reinterpret(Int64, x)
-Base.reinterpret(::Type{Signed}, x::Vec{<:Any, Float32}) = reinterpret(Int32, x)
-=#
 
 _unsigned(::Type{Float32}) = UInt32
 _unsigned(::Type{Float64}) = UInt64
@@ -173,11 +149,6 @@ const BINARY_OPS = [
     (:|, IntegerTypes, LLVM.or)
     (:⊻, IntegerTypes, LLVM.xor)
 
-    (:<<, IntegerTypes, LLVM.shl)
-    (:>>>, IntegerTypes, LLVM.lshr)
-    (:>>, UIntTypes, LLVM.lshr)
-    (:>>, IntTypes, LLVM.ashr)
-
     (:(==), IntegerTypes, LLVM.icmp_eq)
     (:(!=), IntegerTypes, LLVM.icmp_ne)
     (:(>), IntTypes, LLVM.icmp_sgt)
@@ -209,10 +180,40 @@ for (op, constraint, llvmop) in BINARY_OPS
     end
 end
 
+
+# Bitshifts
+
+
+
+function shl_int(x::Vec{N, T1}, y::Vec{N, T2}) where {N, T1<:IntTypes, T2<:UIntTypes}
+    xx = convert(Vec{N, T2}, x)
+    vifelse(y > sizeof())
+    zero(Vec{N, T1})
+    convert(Vec{N, T1}, y)
+    Vec{N, T1}(LLVM.shl(x.data, y.data))
+end
+
+#=
+Base.:>>(x::Vec{N, T}, u::Vec{N, T}) where {N, T} where {N, T<:UIntTypes} = ashr_int(x, y)
+>>(x::BitUnsigned, y::BitUnsigned) = lshr_int(x, y)
+<<(x::BitInteger,  y::BitUnsigned) = shl_int(x, y)
+>>>(x::BitInteger, y::BitUnsigned) = lshr_int(x, y)
+=#
+
+# See https://github.com/JuliaLang/julia/blob/7426625b5c07b0d93110293246089a259a0a677d/src/intrinsics.cpp#L140-L148
+
+
+vifelse(
+y > sizeof(T)
+zero(t),
+lshr(x, uint_cnvt(t, y)
+
 Base.fill(v::T1, ::Type{Vec{N, T2}}) where {N, T1, T2} =
     Vec(LLVM.constantvector(convert(T2, v), LLVM.LVec{N, T2}))
 
 @inline vifelse(v::Bool, v1::Vec{N, T}, v2::Vec{N, T}) where {N, T} = ifelse(v, v1, v2)
+@inline vifelse(v::Bool, v1::T, v2::T) where {T} = ifelse(v, v1, v2)
+
 @inline vifelse(v::Vec{N, Bool}, v1::Vec{N, T}, v2::Vec{N, T}) where {N, T} =
     Vec(LLVM.select(v.data, v1.data, v2.data))
 @inline vifelse(v::Vec{N, Bool}, v1::T2, v2::Vec{N, T}) where {N, T, T2 <:ScalarTypes} = vifelse(v, Vec{N, T}(v1), v2)
@@ -347,10 +348,10 @@ Base.reduce(F::Any, v::Vec) = error("reduction not defined for SIMD.Vec on $F")
 @inline Base.isinf(v::Vec{N, <:IntegerTypes}) where {N} = zero(Vec{N, Bool})
 
 
-# 3 arg
+# 3 arg vectorization
 for (op, llvmop) in [(:fma, LLVM.fma), (:muladd, LLVM.fmuladd)]
     @eval begin
-        @inline Base.$op(a::Vec{N, T}, b::Vec{N, T}, c::Vec{N, T}) where {N,T} =
+        @inline Base.$op(a::Vec{N, T}, b::Vec{N, T}, c::Vec{N, T}) where {N,T<:FloatingTypes} =
             Vec($llvmop(a.data, b.data, c.data))
         @inline Base.$op(s1::ScalarTypes, v2::Vec{N,T},
                 v3::Vec{N,T}) where {N,T<:FloatingTypes} =

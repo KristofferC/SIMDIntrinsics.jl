@@ -60,40 +60,18 @@ llvm_ir(f, args) = sprint(code_llvm, f, Base.typesof(args...))
     @testset "Element-wise access" begin
 
         for i in 1:L8
-            @test Tuple(setindex(V8I32(v8i32), 9.0, Val(i))) ===
-                ntuple(j->Int32(ifelse(j==i, 9, v8i32[j])), L8)
-            @test Tuple(setindex(V8I32(v8i32), 9.0, Val{i})) ===
-                ntuple(j->Int32(ifelse(j==i, 9, v8i32[j])), L8)
-            @test Tuple(setindex(V8I32(v8i32), 9.0, i)) ===
-                ntuple(j->Int32(ifelse(j==i, 9, v8i32[j])), L8)
-
-            @test V8I32(v8i32)[Val{i}] === v8i32[i]
             @test V8I32(v8i32)[i] === v8i32[i]
         end
 
-        @test_throws BoundsError setindex(V8I32(v8i32), 0, Val(0))
-        @test_throws BoundsError setindex(V8I32(v8i32), 0, Val{0})
-        @test_throws BoundsError setindex(V8I32(v8i32), 0, Val(L8+1))
-        @test_throws BoundsError setindex(V8I32(v8i32), 0, Val{L8+1})
         @test_throws BoundsError setindex(V8I32(v8i32), 0, 0)
         @test_throws BoundsError setindex(V8I32(v8i32), 0, L8+1)
-        @test_throws BoundsError V8I32(v8i32)[Val(0)]
-        @test_throws BoundsError V8I32(v8i32)[Val{0}]
-        @test_throws BoundsError V8I32(v8i32)[Val(L8+1)]
-        @test_throws BoundsError V8I32(v8i32)[Val{L8+1}]
         @test_throws BoundsError V8I32(v8i32)[0]
         @test_throws BoundsError V8I32(v8i32)[L8+1]
 
         for i in 1:L4
-            @test Tuple(setindex(V4F64(v4f64), 9, Val(i))) ===
-                ntuple(j->Float64(ifelse(j==i, 9.0, v4f64[j])), L4)
-            @test Tuple(setindex(V4F64(v4f64), 9, Val{i})) ===
-                ntuple(j->Float64(ifelse(j==i, 9.0, v4f64[j])), L4)
             @test Tuple(setindex(V4F64(v4f64), 9, i)) ===
                 ntuple(j->Float64(ifelse(j==i, 9.0, v4f64[j])), L4)
 
-            @test V4F64(v4f64)[Val(i)] === v4f64[i]
-            @test V4F64(v4f64)[Val{i}] === v4f64[i]
             @test V4F64(v4f64)[i] === v4f64[i]
         end
 
@@ -122,24 +100,17 @@ llvm_ir(f, args) = sprint(code_llvm, f, Base.typesof(args...))
         end
 
         global vifelsebool(x,y,z) = vifelse(x>=typeof(x)(0),y,z)
-        #=
         for op in (vifelsebool, muladd)
             @test Tuple(op(V8I32(v8i32), V8I32(v8i32b), V8I32(v8i32c))) ===
                 map(op, v8i32, v8i32b, v8i32c)
         end
-        =#
 
-        #=
-        for op in (<<, >>,) #) , >>>)
-            @test Tuple(op(V8I32(v8i32), Val(3))) === map(x->op(x,3), v8i32)
-            @test Tuple(op(V8I32(v8i32), Val{3})) === map(x->op(x,3), v8i32)
-            @test Tuple(op(V8I32(v8i32), Val(-3))) === map(x->op(x,-3), v8i32)
-            @test Tuple(op(V8I32(v8i32), Val{-3})) === map(x->op(x,-3), v8i32)
+        for op in (<<, >>,) #) #, >>>)
+            @info op
             @test Tuple(op(V8I32(v8i32), 3)) === map(x->op(x,3), v8i32)
             @test Tuple(op(V8I32(v8i32), -3)) === map(x->op(x,-3), v8i32)
             @test Tuple(op(V8I32(v8i32), V8I32(v8i32))) === map(op, v8i32, v8i32)
         end
-        =#
 
         #@test Tuple(V8I32(v8i32)^0) === v8i32.^0
         #@test Tuple(V8I32(v8i32)^1) === v8i32.^1
