@@ -17,6 +17,7 @@ Vec(v::Vararg{T, N}) where {N, T <: ScalarTypes} = Vec(v)
 Vec(v::Vec) = v
 Vec{N, T}(v::Vec{N, T}) where {N, T<:ScalarTypes} = v
 Vec{N, T1}(v::Vec{N, T2}) where {N, T1<:ScalarTypes, T2<:ScalarTypes} = convert(Vec{N, T1}, v)
+Vec{N, T}(v::T) where {N, T<:ScalarTypes} = fill(v, Vec{N, T})
 
 # Should promotion be supported?
 #=
@@ -33,7 +34,7 @@ end
 # noop convert
 @inline Base.convert(::Type{Vec{N,T}}, v::Vec{N,T}) where {N,T} = v
 
-# 
+#
 Base.Tuple(v::Vec) = map(i -> i.value, v.data)
 Base.NTuple{N, T}(v::Vec{N}) where {T, N} = map(i -> convert(T, i.value), v.data)
 
@@ -106,7 +107,7 @@ end
     Vec(LLVM.insertelement(v.data, convert(T, x), i-1))
 end
 
-function Base.setindex(v::Vec{N, T}, x, ::Val{i}) where {N,T,i} 
+function Base.setindex(v::Vec{N, T}, x, ::Val{i}) where {N,T,i}
     @boundscheck checkbounds(v, i)
     Vec(LLVM.insertelement(v.data, convert(T, x), Val(i)))
 end
@@ -135,8 +136,10 @@ const BINARY_OPS = [
     (:-, FloatingTypes, LLVM.fsub)
     (:*, FloatingTypes, LLVM.fmul)
     (:^, FloatingTypes, LLVM.pow)
-    (:/, IntegerTypes, LLVM.fdiv)
-    (:rem, IntegerTypes, LLVM.frem)
+    (:/, FloatingTypes, LLVM.fdiv)
+    (:rem, FloatingTypes, LLVM.frem)
+    (:min, FloatingTypes, LLVM.minnum)
+    (:max, FloatingTypes, LLVM.maxnum)
 
     (:~, IntegerTypes, LLVM.xor)
     (:&, IntegerTypes, LLVM.and)
@@ -190,10 +193,6 @@ Base.fill(v::T, ::Type{Vec{N, T}}) where {N, T} = Vec(LLVM.constantvector(v, LLV
 @inline Base.min(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T<:IntegerTypes} =
     Vec(vifelse(v1 >= v2, v2, v1))
 
-@inline Base.sign(v1::Vec{N,T}) where {N,T<:IntTypes} =
-    vifelse(v1 == zero(Vec{N,T}), zero(Vec{N,T}),
-            vifelse(v1 < zero(Vec{N,T}), -one(Vec{N,T}), one(Vec{N,T})))
-
 # Pow
 @inline Base.:^(x::Vec{N,T}, y::IntegerTypes) where {N,T<:FloatingTypes} =
     Vec(LLVM.powi(x.data, y))
@@ -235,7 +234,7 @@ const UNARY_OPS = [
 ]
 
 for (op, constraint, llvmop) in UNARY_OPS
-    @eval @inline (Base.$op)(x::Vec{<:Any, <:$constraint}) = 
+    @eval @inline (Base.$op)(x::Vec{<:Any, <:$constraint}) =
         Vec($(llvmop)(x.data))
 end
 
@@ -243,6 +242,7 @@ Base.:+(v::Vec) = v
 Base.:-(v::Vec) = zero(v) - v
 Base.abs(v::Vec{N, T}) where {N, T} = Vec(vifelse(v < zero(T), -v, v))
 Base.:!(v1::Vec{N,Bool}) where {N} = ~v1
+Base.inv(v::Vec{N, T}) where {N, T<:FloatingTypes} = one(T) / v
 
 
 ##############
@@ -276,18 +276,29 @@ Base.reduce(F::Any, v::Vec) = error("reduction not defined for SIMD.Vec on $F")
 @inline Base.prod(v::Vec) = reduce(*, v)
 @inline Base.sum(v::Vec) = reduce(+, v)
 
+#################################################
+
 # Various bit counts defined in terms of others
-@inline Base.signbit(x::Vec{<:Any, <:IntegerTypes})  = x < zero(x)
 @inline Base.leading_ones(x::Vec{<:Any, <:IntegerTypes})  = leading_zeros(~(x))
 @inline Base.trailing_ones(x::Vec{<:Any, <:IntegerTypes}) = trailing_zeros(~(x))
 @inline Base.count_zeros(x::Vec{<:Any, <:IntegerTypes}) = count_zeros(~(x))
 
-@inline Base.copysign(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T<:IntTypes} =
+@inline Base.isnan(v::Vec{<:Any, <:FloatingTypes}) = v != v
+@inline Base.isfinite(v::Vec{<:Any, <:FloatingTypes}) = v - v == zero(v)
+@inline Base.isinf(v::Vec{<:Any, <:FloatingTypes}) = !isnan(v) & !isfinite(v)
+@inline Base.signbit(x::Vec{<:Any})  = x < zero(x)
+@inline Base.sign(v1::Vec{N,T}) where {N,T} =
+    vifelse(v1 == zero(Vec{N,T}), zero(Vec{N,T}),
+            vifelse(v1 < zero(Vec{N,T}), -one(Vec{N,T}), one(Vec{N,T})))
+
+@inline Base.isnan(v::Vec{N, <:IntegerTypes}) where {N} = zero(Vec{N,Bool})
+@inline Base.isfinite(v::Vec{N, <:IntegerTypes}) where {N} = one(Vec{N, Bool})
+@inline Base.isinf(v::Vec{N, <:IntegerTypes}) where {N} = zero(Vec{N, Bool})
+
+@inline Base.copysign(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T} =
     vifelse(signbit(v2), -abs(v1), abs(v1))
-@inline Base.copysign(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T<:UIntTypes} = v1
-@inline Base.flipsign(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T<:IntTypes} =
+@inline Base.flipsign(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T} =
     vifelse(signbit(v2), -v1, v1)
-@inline Base.flipsign(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T<:UIntTypes} = v1
 
 # Muladd
 Base.muladd(a::Vec{N, T}, b::Vec{N, T}, c::Vec{N, T}) where {N,T} = Vec(LLVM.fmuladd(a.data, b.data, c.data))
