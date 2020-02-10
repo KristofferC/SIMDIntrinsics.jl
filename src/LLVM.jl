@@ -2,6 +2,7 @@
 module LLVM
 
 # TODO masked loads and stores
+# TODO: fastmath flags
 
 import ..SIMDIntrinsics: VE, LVec, IntegerTypes, IntTypes, UIntTypes, FloatingTypes
 
@@ -29,6 +30,7 @@ const d = Dict{DataType, String}(
 # TODO: Clean up
 suffix(N::Integer, ::Type{Ptr{T}}) where {T} = "v$(N)p0$(T<:IntegerTypes ? "i" : "f")$(8*sizeof(T))"
 suffix(N::Integer, ::Type{T}) where {T} = "v$(N)$(T<:IntegerTypes ? "i" : "f")$(8*sizeof(T))"
+suffix(::Type{T}) where {T} = "$(T<:IntegerTypes ? "i" : "f")$(8*sizeof(T))"
 llvm_name(llvmf, N, T) = string("llvm", ".", llvmf, ".", suffix(N, T))
 
 #####################
@@ -101,36 +103,34 @@ end
 # Gather / Scatter #
 ####################
 
-@generated function maskedgather(::Type{LVec{N, T}}, ptrs::Union{LVec{N, Ptr{T}}, LVec{N, Int}}) where {N, T}
-    # TODO: Allow setting the mask
+@generated function maskedgather(::Type{LVec{N, T}}, ptrs::Union{LVec{N, Ptr{T}}, LVec{N, Int}}, mask::LVec{N,Bool}) where {N, T}
     # TODO: Allow setting the passthru
     decl = "declare <$N x $(d[T])> @llvm.masked.gather.$(suffix(N, T))(<$N x $(d[T])*>, i32, <$N x i1>, <$N x $(d[T])>)"
-    mask = join(("i1 true" for i in 1:N), ", ")
 
     s = """
+    %cond = trunc <$(N) x i8> %1 to <$(N) x i1>
     %ptrs = inttoptr <$N x $(d[Int])> %0 to <$N x $(d[T])*>
-    %res = call <$N x $(d[T])> @llvm.masked.gather.$(suffix(N, T))(<$N x $(d[T])*> %ptrs, i32 8, <$N x i1> <$mask>, <$N x $(d[T])> undef)
+    %res = call <$N x $(d[T])> @llvm.masked.gather.$(suffix(N, T))(<$N x $(d[T])*> %ptrs, i32 8, <$N x i1> %cond, <$N x $(d[T])> zeroinitializer)
     ret <$N x $(d[T])> %res
     """
     return :(
         $(Expr(:meta, :inline));
-        Base.llvmcall(($decl, $s), LVec{N, T}, Tuple{typeof(ptrs)}, ptrs)
+        Base.llvmcall(($decl, $s), LVec{N, T}, Tuple{typeof(ptrs), LVec{N, Bool}}, ptrs, mask)
     )
 end
 
-@generated function maskedscatter(x::LVec{N, T}, ptrs::Union{LVec{N, Int}, LVec{N, Ptr{T}}}) where {N, T}
-    # TODO: Allow setting the mask
-    mask = join(("i1 true " for i in 1:N), ", ")
+@generated function maskedscatter(x::LVec{N, T}, ptrs::Union{LVec{N, Int}, LVec{N, Ptr{T}}}, mask::LVec{N, Bool}) where {N, T}
     decl = "declare <$N x $(d[T])> @llvm.masked.scatter.$(suffix(N, T))(<$N x $(d[T])>, <$N x $(d[T])*>, i32, <$N x i1>)"
 
     s = """
+    %cond = trunc <$(N) x i8> %2 to <$(N) x i1>
     %ptrs = inttoptr <$N x $(d[Int])> %1 to <$N x $(d[T])*>
-    call <$N x $(d[T])> @llvm.masked.scatter.$(suffix(N, T))(<$N x $(d[T])> %0, <$N x $(d[T])*> %ptrs, i32 8, <$N x i1> <$mask>)
+    call <$N x $(d[T])> @llvm.masked.scatter.$(suffix(N, T))(<$N x $(d[T])> %0, <$N x $(d[T])*> %ptrs, i32 8, <$N x i1> %cond)
     ret void
     """
     return :(
         $(Expr(:meta, :inline));
-        Base.llvmcall(($decl, $s), Cvoid, Tuple{LVec{N, T}, typeof(ptrs)}, x, ptrs)
+        Base.llvmcall(($decl, $s), Cvoid, Tuple{LVec{N, T}, typeof(ptrs), LVec{N, Bool}}, x, ptrs, mask)
     )
 end
 
@@ -172,29 +172,30 @@ end
     )
 end
 
+_shuffle_vec(I) = join((string("i32 ", i == :undef ? "undef" : Int32(i::Integer)) for i in I), ", ")
 @generated function shufflevector(x::LVec{N, T}, y::LVec{N, T}, ::Val{I}) where {N, T, I}
-    # Assert I < 2N?
-    shfl = join((string("i32 ", i) for i in I), ", ")
+    shfl = _shuffle_vec(I)
+    M = length(I)
     s = """
-    %res = shufflevector <$N x $(d[T])> %0, <$N x $(d[T])> %1, <$N x i32> <$shfl>
-    ret <$N x $(d[T])> %res
+    %res = shufflevector <$N x $(d[T])> %0, <$N x $(d[T])> %1, <$M x i32> <$shfl>
+    ret <$M x $(d[T])> %res
     """
     return :(
         $(Expr(:meta, :inline));
-        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}, LVec{N, T}}, x, y)
+        Base.llvmcall($s, LVec{$M, T}, Tuple{LVec{N, T}, LVec{N, T}}, x, y)
     )
 end
 
 @generated function shufflevector(x::LVec{N, T}, ::Val{I}) where {N, T, I}
-    # Assert I < N?
-    shfl = join((string("i32 ", i) for i in I), ", ")
+    shfl = _shuffle_vec(I)
+    M = length(I)
     s = """
-    %res = shufflevector <$N x $(d[T])> %0, <$N x $(d[T])> undef, <$N x i32> <$shfl>
-    ret <$N x $(d[T])> %res
+    %res = shufflevector <$(N) x $(d[T])> %0, <$N x $(d[T])> undef, <$M x i32> <$shfl>
+    ret <$M x $(d[T])> %res
     """
     return :(
         $(Expr(:meta, :inline));
-        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}}, x)
+        Base.llvmcall($s, LVec{$M, T}, Tuple{LVec{N, T}}, x)
     )
 end
 
@@ -328,6 +329,7 @@ const UNARY_INTRINSICS = [
     :sin
     :cos
     :exp
+    :trunc
     :exp2
     :log
     :log10
@@ -351,6 +353,22 @@ for f in UNARY_INTRINSICS
     end
     end
 end
+
+# fneg
+@generated function fneg(x::LVec{N, T}) where {N, T<:FloatingTypes}
+    s = """
+    %2 = fneg <$(N) x $(d[T])> %0
+    ret <$(N) x $(d[T])> %2
+    """
+    return :(
+        $(Expr(:meta, :inline));
+        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}}, x)
+    )
+end
+
+#####################
+# Binary operators  #
+#####################
 
 const BINARY_INTRINSICS = [
     :minnum,
@@ -386,9 +404,7 @@ for (f, constraint) in [(:pow, FloatingTypes), (:powi, IntegerTypes)]
             ccall($ff, llvmcall, LVec{N, T1}, (LVec{N, T1}, T2), x, y)
         )
     end
-
 end
-
 
 ####################
 # Bit manipulation #
@@ -453,6 +469,7 @@ const MULADD_INTRINSICS = [
     :fma,
 ]
 
+# Problem with muladd?????
 for f in MULADD_INTRINSICS
     @eval @generated function $(f)(a::LVec{N, T}, b::LVec{N, T}, c::LVec{N, T}) where {N, T}
         ff = llvm_name($(QuoteNode(f)), N, T)
@@ -483,11 +500,11 @@ for fs in HORZ_REDUCTION_OPS
             ff = llvm_name(string("experimental.vector.reduce.", $(QuoteNode(f))), N, T)
             decl = "declare $(d[T]) @$ff(<$N x $(d[T])>)"
             s2 = """
-            %res = call $(d[T]) @$ff(<4 x $(d[T])> %0)
+            %res = call $(d[T]) @$ff(<$N x $(d[T])> %0)
             ret $(d[T]) %res
             """
             return quote
-                Base.llvmcall($(decl, s2), T, Tuple{LVec{4, T},}, x)
+                Base.llvmcall($(decl, s2), T, Tuple{LVec{N, T},}, x)
             end
         end
     end
@@ -502,6 +519,23 @@ for (f, neutral) in [(:fadd, "0.0"), (:fmul, "1.0")]
         ff = llvm_name(string("experimental.vector.reduce.", $(QuoteNode(f))), N, T)
         decl = "declare $(d[T]) @$ff($(d[T]), <$N x $(d[T])>)"
         s2 = """
+        %res = call $(d[T]) @$ff($(d[T]) $($neutral), <$N x $(d[T])> %0)
+        ret $(d[T]) %res
+        """
+        return quote
+            Base.llvmcall($(decl, s2), T, Tuple{LVec{N, T},}, x)
+        end
+    end
+end
+#=
+
+for (f, neutral) in [(:fadd, "0.0"), (:fmul, "1.0")]
+    f_red = Symbol("reduce_v2_", f)
+    @eval @generated function $f_red(x::LVec{N, T}) where {N,T<:FloatingTypes}
+        ff = llvm_name(string("experimental.vector.reduce.v2.", suffix(T), ".", $(QuoteNode(f))), N, T)
+        @show ff
+        decl = "declare $(d[T]) @$ff($(d[T]), <$N x $(d[T])>)"
+        s2 = """
         %res = call $(d[T]) @$ff($(d[T]) $($neutral), <4 x $(d[T])> %0)
         ret $(d[T]) %res
         """
@@ -510,5 +544,6 @@ for (f, neutral) in [(:fadd, "0.0"), (:fmul, "1.0")]
         end
     end
 end
+=#
 
 end

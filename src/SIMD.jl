@@ -7,7 +7,7 @@ import .LLVM: shufflevector
 
 using Base: @propagate_inbounds
 
-export Vec, vload, vstore, vgather, vscatter, vload, shufflevector
+export Vec, vload, vstore, vgather, vscatter, vload, shufflevector, vifelse
 
 struct Vec{N, T <: ScalarTypes}
     data::LVec{N, T}
@@ -17,7 +17,9 @@ Vec(v::Vararg{T, N}) where {N, T <: ScalarTypes} = Vec(v)
 Vec(v::Vec) = v
 Vec{N, T}(v::Vec{N, T}) where {N, T<:ScalarTypes} = v
 Vec{N, T1}(v::Vec{N, T2}) where {N, T1<:ScalarTypes, T2<:ScalarTypes} = convert(Vec{N, T1}, v)
-Vec{N, T}(v::T) where {N, T<:ScalarTypes} = fill(v, Vec{N, T})
+Vec{N, T1}(v::T2) where {N, T1<:ScalarTypes, T2<:ScalarTypes} = fill(convert(T1, v), Vec{N, T1})
+
+include("vectorops.jl")
 
 # Should promotion be supported?
 #=
@@ -120,10 +122,34 @@ Base.zero(::Vec{N,T}) where {N, T} = zero(Vec{N, T})
 Base.one(::Type{Vec{N,T}}) where {N, T} = fill(one(T), Vec{N, T})
 Base.one(::Vec{N,T}) where {N, T} = one(Vec{N, T})
 
-Base.reinterpret(::Type{Vec{N1, T1}}, v::Vec) where {T1, N1} = Vec(LLVM.bitcast(LLVM.LVec{N1, T1}, v.data))
+Base.reinterpret(::Type{Vec{N, T}}, v::Vec) where {T, N} = Vec(LLVM.bitcast(LLVM.LVec{N, T}, v.data))
 Base.reinterpret(::Type{T}, v::Vec) where {T} = LLVM.bitcast(T, v.data)
+#=
+Base.reinterpret(::Type{Vec{N, Unsigned}}, v::Vec{N, Float64}) where {N} = reinterpret(Vec{N, UInt64}, v)
+Base.reinterpret(::Type{Vec{N, Unsigned}}, v::Vec{N, Float32}) where {N} = reinterpret(Vec{N, UInt32}, v)
+Base.reinterpret(::Type{Vec{N, Signed}}, v::Vec{N, Float64}) where {N} = reinterpret(Vec{N, Int64}, v)
+Base.reinterpret(::Type{Vec{N, Signed}}, v::Vec{N, Float32}) where {N} = reinterpret(Vec{N, Int32}, v)
+=#
+
+#=
+Base.reinterpret(::Type{Unsigned}, x::Vec{<:Any, Float64}) = reinterpret(UInt64, x)
+Base.reinterpret(::Type{Unsigned}, x::Vec{<:Any, Float32}) = reinterpret(UInt32, x)
+Base.reinterpret(::Type{Signed}, x::Vec{<:Any, Float64}) = reinterpret(Int64, x)
+Base.reinterpret(::Type{Signed}, x::Vec{<:Any, Float32}) = reinterpret(Int32, x)
+=#
+
+_unsigned(::Type{Float32}) = UInt32
+_unsigned(::Type{Float64}) = UInt64
+_signed(::Type{Float32}) = Int32
+_signed(::Type{Float64}) = Int64
+
+function Base.issubnormal(x::Vec{N, T}) where {N, T<:FloatingTypes}
+    y = reinterpret(Vec{N, _unsigned(T)}, x)
+    (y & Base.exponent_mask(T) == 0) & (y & Base.significand_mask(T) != 0)
+end
 
 const BINARY_OPS = [
+
     (:+, IntegerTypes, LLVM.add)
     (:-, IntegerTypes, LLVM.sub)
     (:*, IntegerTypes, LLVM.mul)
@@ -140,6 +166,7 @@ const BINARY_OPS = [
     (:rem, FloatingTypes, LLVM.frem)
     (:min, FloatingTypes, LLVM.minnum)
     (:max, FloatingTypes, LLVM.maxnum)
+    (:copysign, FloatingTypes, LLVM.copysign)
 
     (:~, IntegerTypes, LLVM.xor)
     (:&, IntegerTypes, LLVM.and)
@@ -174,19 +201,22 @@ for (op, constraint, llvmop) in BINARY_OPS
     @eval @inline function (Base.$op)(x::Vec{N, T}, y::Vec{N, T}) where {N, T <: $constraint}
         Vec($(llvmop)(x.data, y.data))
     end
-    @eval @inline function (Base.$op)(x::T, y::Vec{N, T}) where {N, T <: $constraint}
-        Vec($(llvmop)(fill(x, Vec{N, T}).data, y.data))
+    @eval @inline function (Base.$op)(x::T2, y::Vec{N, T}) where {N, T2<:ScalarTypes, T <: $constraint}
+        Vec($(llvmop)(fill(convert(T, x), Vec{N, T}).data, y.data))
     end
-    @eval @inline function (Base.$op)(x::Vec{N, T}, y::T) where {N, T <: $constraint}
-        Vec($(llvmop)(x.data, fill(y, Vec{N, T}).data))
+    @eval @inline function (Base.$op)(x::Vec{N, T}, y::T2) where {N, T2 <:ScalarTypes, T <: $constraint}
+        Vec($(llvmop)(x.data, fill(convert(T, y), Vec{N, T}).data))
     end
 end
 
-Base.fill(v::T, ::Type{Vec{N, T}}) where {N, T} = Vec(LLVM.constantvector(v, LLVM.LVec{N, T}))
+Base.fill(v::T1, ::Type{Vec{N, T2}}) where {N, T1, T2} =
+    Vec(LLVM.constantvector(convert(T2, v), LLVM.LVec{N, T2}))
 
 @inline vifelse(v::Bool, v1::Vec{N, T}, v2::Vec{N, T}) where {N, T} = ifelse(v, v1, v2)
 @inline vifelse(v::Vec{N, Bool}, v1::Vec{N, T}, v2::Vec{N, T}) where {N, T} =
     Vec(LLVM.select(v.data, v1.data, v2.data))
+@inline vifelse(v::Vec{N, Bool}, v1::T2, v2::Vec{N, T}) where {N, T, T2 <:ScalarTypes} = vifelse(v, Vec{N, T}(v1), v2)
+@inline vifelse(v::Vec{N, Bool}, v1::Vec{N, T}, v2::T2) where {N, T, T2 <:ScalarTypes} = vifelse(v, v1, Vec{N, T}(v2))
 
 @inline Base.max(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T<:IntegerTypes} =
     Vec(vifelse(v1 >= v2, v1, v2))
@@ -203,6 +233,26 @@ Base.fill(v::T, ::Type{Vec{N, T}}) where {N, T} = Vec(LLVM.constantvector(v, LLV
 @inline Base.literal_pow(::typeof(^), x::Vec{Any, <:FloatingTypes}, ::Val{3}) = x*x*x
 
 
+# int.jl
+@inline Base.signbit(x::Vec{N, <:IntegerTypes}) where {N} = x < 0
+# flipsign(x::T, y::T) where {T<:BitSigned} = flipsign_int(x, y)
+
+@inline Base.flipsign(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T} =
+    vifelse(signbit(v2), -v1, v1)
+@inline Base.copysign(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T<:IntTypes} =
+    vifelse(signbit(v2), -abs(v1), abs(v1))
+@inline Base.signbit(x::Vec{N, T}) where {N, T <:FloatingTypes} = signbit(reinterpret(Vec{N, _signed(T)}, x))
+
+for f in (:copysign, :flipsign, :min, :max)
+    @eval begin
+    @inline Base.$f(v1::Vec{N,T}, v2::T2) where {N,T,T2<:ScalarTypes} =
+            $f(v1, Vec{N,T}(v2))
+        @inline Base.$f(v1::T2, v2::Vec{N,T}) where {N,T,T2<:ScalarTypes} =
+            $f(Vec{N,T}(v1), v2)
+    end
+end
+
+
 #########
 # Unary #
 #########
@@ -210,6 +260,7 @@ Base.fill(v::T, ::Type{Vec{N, T}}) where {N, T} = Vec(LLVM.constantvector(v, LLV
 const UNARY_OPS = [
     (:sqrt, FloatingTypes, LLVM.sqrt),
     (:sin, FloatingTypes, LLVM.sin),
+    (:trunc, FloatingTypes, LLVM.trunc),
     (:cos, FloatingTypes, LLVM.cos),
     (:exp, FloatingTypes, LLVM.exp),
     (:exp2, FloatingTypes, LLVM.exp2),
@@ -239,7 +290,8 @@ for (op, constraint, llvmop) in UNARY_OPS
 end
 
 Base.:+(v::Vec) = v
-Base.:-(v::Vec) = zero(v) - v
+Base.:-(v::Vec{<:Any, <:IntegerTypes}) = zero(v) - v
+Base.:-(v::Vec{<:Any, <:FloatingTypes}) = Vec(LLVM.fneg(v.data))
 Base.abs(v::Vec{N, T}) where {N, T} = Vec(vifelse(v < zero(T), -v, v))
 Base.:!(v1::Vec{N,Bool}) where {N} = ~v1
 Base.inv(v::Vec{N, T}) where {N, T<:FloatingTypes} = one(T) / v
@@ -286,7 +338,6 @@ Base.reduce(F::Any, v::Vec) = error("reduction not defined for SIMD.Vec on $F")
 @inline Base.isnan(v::Vec{<:Any, <:FloatingTypes}) = v != v
 @inline Base.isfinite(v::Vec{<:Any, <:FloatingTypes}) = v - v == zero(v)
 @inline Base.isinf(v::Vec{<:Any, <:FloatingTypes}) = !isnan(v) & !isfinite(v)
-@inline Base.signbit(x::Vec{<:Any})  = x < zero(x)
 @inline Base.sign(v1::Vec{N,T}) where {N,T} =
     vifelse(v1 == zero(Vec{N,T}), zero(Vec{N,T}),
             vifelse(v1 < zero(Vec{N,T}), -one(Vec{N,T}), one(Vec{N,T})))
@@ -295,61 +346,38 @@ Base.reduce(F::Any, v::Vec) = error("reduction not defined for SIMD.Vec on $F")
 @inline Base.isfinite(v::Vec{N, <:IntegerTypes}) where {N} = one(Vec{N, Bool})
 @inline Base.isinf(v::Vec{N, <:IntegerTypes}) where {N} = zero(Vec{N, Bool})
 
-@inline Base.copysign(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T} =
-    vifelse(signbit(v2), -abs(v1), abs(v1))
-@inline Base.flipsign(v1::Vec{N,T}, v2::Vec{N,T}) where {N,T} =
-    vifelse(signbit(v2), -v1, v1)
 
-# Muladd
-Base.muladd(a::Vec{N, T}, b::Vec{N, T}, c::Vec{N, T}) where {N,T} = Vec(LLVM.fmuladd(a.data, b.data, c.data))
-Base.fma(a::Vec{N, T}, b::Vec{N, T}, c::Vec{N, T}) where {N,T} = Vec(LLVM.fma(a.data, b.data, c.data))
-
-@inline vload(::Type{Vec{N, T}}, ptr::Ptr{T}) where {N, T} = Vec(LLVM.load(LLVM.LVec{N, T}, ptr))
-@inline function vload(::Type{Vec{N, T}}, a::Array{T}, i::Integer) where {N, T}
-    @boundscheck checkbounds(a, i + N - 1)
-    GC.@preserve a begin
-        return vload(Vec{N, T}, pointer(a, i))
+# 3 arg
+for (op, llvmop) in [(:fma, LLVM.fma), (:muladd, LLVM.fmuladd)]
+    @eval begin
+        @inline Base.$op(a::Vec{N, T}, b::Vec{N, T}, c::Vec{N, T}) where {N,T} =
+            Vec($llvmop(a.data, b.data, c.data))
+        @inline Base.$op(s1::ScalarTypes, v2::Vec{N,T},
+                v3::Vec{N,T}) where {N,T<:FloatingTypes} =
+            $op(Vec{N,T}(s1), v2, v3)
+        @inline Base.$op(v1::Vec{N,T}, s2::ScalarTypes,
+                v3::Vec{N,T}) where {N,T<:FloatingTypes} =
+            $op(v1, Vec{N,T}(s2), v3)
+        @inline Base.$op(s1::ScalarTypes, s2::ScalarTypes,
+                v3::Vec{N,T}) where {N,T<:FloatingTypes} =
+            $op(Vec{N,T}(s1), Vec{N,T}(s2), v3)
+        @inline Base.$op(v1::Vec{N,T}, v2::Vec{N,T},
+                s3::ScalarTypes) where {N,T<:FloatingTypes} =
+            $op(v1, v2, Vec{N,T}(s3))
+        @inline Base.$op(s1::ScalarTypes, v2::Vec{N,T},
+                s3::ScalarTypes) where {N,T<:FloatingTypes} =
+            $op(Vec{N,T}(s1), v2, Vec{N,T}(s3))
+        @inline Base.$op(v1::Vec{N,T}, s2::ScalarTypes,
+                s3::ScalarTypes) where {N,T<:FloatingTypes} =
+            $op(v1, Vec{N,T}(s2), Vec{N,T}(s3))
     end
 end
 
-@inline vstore(x::Vec{N, T}, ptr::Ptr{T}) where {N, T} = LLVM.store(x.data, ptr)
-@inline function vstore(x::Vec{N, T}, a::Array{T}, i::Integer) where {N, T}
-    @boundscheck checkbounds(a, i + N - 1)
-    GC.@preserve a begin
-        vstore(x, pointer(a, i))
-    end
-    return a
-end
-
-@inline function LLVM.shufflevector(x::Vec{N, T}, ::Val{I}) where {N, T, I}
+@inline function shufflevector(x::Vec{N, T}, ::Val{I}) where {N, T, I}
     Vec(LLVM.shufflevector(x.data, Val(I)))
 end
-@inline function LLVM.shufflevector(x::Vec{N, T}, y::Vec{N, T}, ::Val{I}) where {N, T, I}
+@inline function shufflevector(x::Vec{N, T}, y::Vec{N, T}, ::Val{I}) where {N, T, I}
     Vec(LLVM.shufflevector(x.data, y.data, Val(I)))
 end
-
-@inline function vgather(a::Array{T}, group_lane::Vec{N, Int}) where {N, T}
-    @boundscheck for i in 1:N
-        checkbounds(a, @inbounds group_lane[i])
-    end
-    p = fill(Int(pointer(a)), Vec{N, Int})
-    ptrs = p + (group_lane - 1) * sizeof(T)
-    GC.@preserve a begin
-        return Vec(LLVM.maskedgather(LLVM.LVec{N, T}, ptrs.data))
-    end
-end
-
-@inline function vscatter(a::Array{T}, x::Vec{N, T}, group_lane::Vec{N, Int}) where {N, T}
-    @boundscheck for i in 1:N
-        checkbounds(a, @inbounds group_lane[i])
-    end
-    p = fill(Int(pointer(a)), Vec{N, Int})
-    ptrs = p + (group_lane - 1) * sizeof(T)
-    GC.@preserve a begin
-        LLVM.maskedscatter(x.data, ptrs.data)
-    end
-    return
-end
-
 
 end
