@@ -15,23 +15,14 @@ end
 Vec(v::NTuple{N, T}) where {N, T <: ScalarTypes} = Vec(VE.(v))
 Vec(v::Vararg{T, N}) where {N, T <: ScalarTypes} = Vec(v)
 Vec(v::Vec) = v
+
+Base.fill(v::T1, ::Type{Vec{N, T2}}) where {N, T1, T2} =
+    Vec(LLVM.constantvector(convert(T2, v), LLVM.LVec{N, T2}))
 Vec{N, T}(v::Vec{N, T}) where {N, T<:ScalarTypes} = v
 Vec{N, T1}(v::Vec{N, T2}) where {N, T1<:ScalarTypes, T2<:ScalarTypes} = convert(Vec{N, T1}, v)
 Vec{N, T1}(v::T2) where {N, T1<:ScalarTypes, T2<:ScalarTypes} = fill(convert(T1, v), Vec{N, T1})
 
 include("vectorops.jl")
-
-# Should promotion be supported?
-#=
-@inline function Base.promote_rule(::Type{Vec{N, T1}}, ::Type{Vec{N, T2}}) where {T1, T2, N}
-    Vec{N, promote_type(T1, T2)}
-end
-
-@inline function Base.promote(v1::Vec{N, T1}, v2::Vec{N, T2}) where {T1, T2, N}
-    return convert(promote_type(Vec{N, T1}, Vec{N, T2}), v1),
-           convert(promote_type(Vec{N, T1}, Vec{N, T2}), v2)
-end
-=#
 
 # noop convert
 @inline Base.convert(::Type{Vec{N,T}}, v::Vec{N,T}) where {N,T} = v
@@ -46,6 +37,8 @@ Base.NTuple{N, T}(v::Vec{N}) where {T, N} = map(i -> convert(T, i.value), v.data
         if T2 <: IntegerTypes
             if sizeof(T1) < sizeof(T2)
                 return Vec(LLVM.trunc(LLVM.LVec{N, T1}, v.data))
+            elseif sizeof(T1) == sizeof(T2)
+                return Vec(LLVM.bitcast(LLVM.LVec{N, T1}, v.data))
             else
                 return Vec(LLVM.sext(LLVM.LVec{N, T1}, v.data))
             end
@@ -65,6 +58,8 @@ Base.NTuple{N, T}(v::Vec{N}) where {T, N} = map(i -> convert(T, i.value), v.data
         elseif T2 <: FloatingTypes
             if sizeof(T1) < sizeof(T2)
                 return Vec(LLVM.fptrunc(LLVM.LVec{N, T1}, v.data))
+            elseif sizeof(T1) == sizeof(T2)
+                return Vec(LLVM.bitcast(LLVM.LVec{N, T1}, v.data))
             else
                 return Vec(LLVM.fpext(LLVM.LVec{N, T1}, v.data))
             end
@@ -184,32 +179,57 @@ end
 # Bitshifts
 
 
-
-function shl_int(x::Vec{N, T1}, y::Vec{N, T2}) where {N, T1<:IntTypes, T2<:UIntTypes}
-    xx = convert(Vec{N, T2}, x)
-    vifelse(y > sizeof())
-    zero(Vec{N, T1})
-    convert(Vec{N, T1}, y)
-    Vec{N, T1}(LLVM.shl(x.data, y.data))
+# See https://github.com/JuliaLang/julia/blob/7426625b5c07b0d93110293246089a259a0a677d/src/intrinsics.cpp#L1179-L1196
+function shl_int(x::Vec{N, T1}, y::Vec{N, T2}) where {N, T1<:IntegerTypes, T2<:IntegerTypes}
+    vifelse(y > sizeof(T1) * 8,
+        zero(Vec{N, T1}),
+        Vec(LLVM.shl(x.data, convert(Vec{N,T1}, y).data)))
 end
 
-#=
-Base.:>>(x::Vec{N, T}, u::Vec{N, T}) where {N, T} where {N, T<:UIntTypes} = ashr_int(x, y)
->>(x::BitUnsigned, y::BitUnsigned) = lshr_int(x, y)
-<<(x::BitInteger,  y::BitUnsigned) = shl_int(x, y)
->>>(x::BitInteger, y::BitUnsigned) = lshr_int(x, y)
-=#
+function lshr_int(x::Vec{N, T1}, y::Vec{N, T2}) where {N, T1<:IntegerTypes, T2<:IntegerTypes}
+    vifelse(y > sizeof(T1) * 8,
+        zero(Vec{N, T1}),
+        Vec(LLVM.lshr(x.data, convert(Vec{N,T1}, y).data)))
+end
 
-# See https://github.com/JuliaLang/julia/blob/7426625b5c07b0d93110293246089a259a0a677d/src/intrinsics.cpp#L140-L148
+function ashr_int(x::Vec{N, T1}, y::Vec{N, T2}) where {N, T1<:IntegerTypes, T2<:IntegerTypes}
+    vifelse(y > sizeof(T1) * 8,
+            Vec(LLVM.ashr(x.data, fill(sizeof(T1)*8-1, Vec{N,T1}).data)),
+            Vec(LLVM.ashr(x.data, convert(Vec{N,T1}, y).data)))
+end
 
+Base.:>>(x::Vec{N, <:IntTypes}, y::Vec{N, <:UIntTypes}) where {N} =
+    ashr_int(x, y)
+Base.:>>(x::Vec{N, T1}, y::Vec{N, T2}) where {N, T1<:UIntTypes, T2<:UIntTypes} =
+    lshr_int(x, y)
+Base.:<<(x::Vec{N, T1}, y::Vec{N, T2}) where {N, T1<:IntegerTypes, T2<:UIntTypes} =
+    shl_int(x, y)
+Base.:>>>(x::Vec{N, T1}, y::Vec{N, T2}) where {N, T1<:IntegerTypes, T2<:UIntTypes} =
+    lshr_int(x, y)
 
-vifelse(
-y > sizeof(T)
-zero(t),
-lshr(x, uint_cnvt(t, y)
+unsigned(v::Vec{<:Any, <:UIntTypes}) = v
+unsigned(v::Vec{N, Int32}) where {N} = convert(Vec{N, UInt32}, v)
+unsigned(v::Vec{N, Int64}) where {N} = convert(Vec{N, UInt64}, v)
 
-Base.fill(v::T1, ::Type{Vec{N, T2}}) where {N, T1, T2} =
-    Vec(LLVM.constantvector(convert(T2, v), LLVM.LVec{N, T2}))
+Base.:>>(x::Vec{N, T1}, y::Vec{N, Int}) where {N, T1<:IntegerTypes} =
+    vifelse(0 <= y, x >> unsigned(y), x << unsigned(-y))
+Base.:<<(x::Vec{N, T1}, y::Vec{N, Int}) where {N, T1<:IntegerTypes} =
+    vifelse(0 <= y, x << unsigned(y), x >> unsigned(-y))
+Base.:>>>(x::Vec{N, T1}, y::Vec{N, Int}) where {N, T1<:IntegerTypes} =
+    vifelse(0 <= y, x >>> unsigned(y), x << unsigned(-y))
+
+for v in (:<<, :>>, :>>>)
+    @eval begin
+        Base.$v(x::Vec{N,T}, y::ScalarTypes) where {N, T} = $v(x, Vec{N,T}(y))
+        Base.$v(x::ScalarTypes, y::Vec{N,T}) where {N, T} = $v(Vec{N,T}(x), y)
+        Base.$v(x::Vec{N,T1}, y::Vec{N,T2}) where {N, T1<:IntegerTypes, T2<:IntegerTypes} =
+            $v(x, convert(Vec{N, Int}, y))
+    end
+end
+
+#Base.:>>(x::Vec{N, <:IntegerTypes}, c::IntegerTypes) where {N}  =  >>(convert(Vec{N, Int}, x), c)
+#Base.:<<(x::Vec{N, <:IntegerTypes}, c::IntegerTypes) where {N}  =  <<(convert(Vec{N, Int}, x), c)
+#Base.:>>>(x::Vec{N, <:IntegerTypes}, c::IntegerTypes) where {N} = >>>(convert(Vec{N, Int}, x), c)
 
 @inline vifelse(v::Bool, v1::Vec{N, T}, v2::Vec{N, T}) where {N, T} = ifelse(v, v1, v2)
 @inline vifelse(v::Bool, v1::T, v2::T) where {T} = ifelse(v, v1, v2)

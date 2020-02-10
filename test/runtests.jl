@@ -22,7 +22,12 @@ llvm_ir(f, args) = sprint(code_llvm, f, Base.typesof(args...))
     global const L4 = nbytes÷8
 
     global const V8I32 = Vec{L8,Int32}
+    global const V8I64 = Vec{L8,Int64}
     global const V4F64 = Vec{L4,Float64}
+
+    global const v8i32 = ntuple(i->Int32(ifelse(isodd(i), i, -i)), L8)
+    global const v8i64 = ntuple(i->Int64(ifelse(isodd(i), i, -i)), L8)
+    global const v4f64 = ntuple(i->Float64(ifelse(isodd(i), i, -i)), L4)
 
     is_checking_bounds = Core.Compiler.inbounds_option() == :on
 
@@ -40,10 +45,6 @@ llvm_ir(f, args) = sprint(code_llvm, f, Base.typesof(args...))
     end
 
     @testset "Type conversion" begin
-
-        global const v8i32 = ntuple(i->Int32(ifelse(isodd(i), i, -i)), L8)
-        global const v4f64 = ntuple(i->Float64(ifelse(isodd(i), i, -i)), L4)
-
         @test string(V8I32(v8i32)) == "<8 x Int32>[" * string(v8i32)[2:end-1] * "]"
         @test string(V4F64(v4f64)) == "<4 x Float64>[" * string(v4f64)[2:end-1] * "]"
 
@@ -88,7 +89,7 @@ llvm_ir(f, args) = sprint(code_llvm, f, Base.typesof(args...))
         global const v8i32b = map(x->Int32(x+1), v8i32)
         global const v8i32c = map(x->Int32(x*2), v8i32)
 
-        notbool(x::T) where {T} = !(x>=zero(T))
+        notbool(x::T) where {T} = !(x>=0)
         for op in (~, +, -, abs, notbool, sign, signbit)
             @test Tuple(op(V8I32(v8i32))) == map(op, v8i32)
         end
@@ -105,17 +106,17 @@ llvm_ir(f, args) = sprint(code_llvm, f, Base.typesof(args...))
                 map(op, v8i32, v8i32b, v8i32c)
         end
 
-        for op in (<<, >>,) #) #, >>>)
-            @info op
-            @test Tuple(op(V8I32(v8i32), 3)) === map(x->op(x,3), v8i32)
-            @test Tuple(op(V8I32(v8i32), -3)) === map(x->op(x,-3), v8i32)
-            @test Tuple(op(V8I32(v8i32), V8I32(v8i32))) === map(op, v8i32, v8i32)
+        for op in (<<, >>, >>>)
+            for v in (V8I32(v8i32), V8I64(v8i64))
+                for z in (3, UInt(3), 10000)
+                    @test Tuple(op(v, z)) === map(x->op(x,z), Tuple(v))
+                    if z isa Int
+                        @test Tuple(op(v, -z)) === map(x->op(x,-z), Tuple(v))
+                    end
+                    @test Tuple(op(v, v)) === map(op, Tuple(v), Tuple(v))
+                end
+            end
         end
-
-        #@test Tuple(V8I32(v8i32)^0) === v8i32.^0
-        #@test Tuple(V8I32(v8i32)^1) === v8i32.^1
-        #@test Tuple(V8I32(v8i32)^2) === v8i32.^2
-        #@test Tuple(V8I32(v8i32)^3) === v8i32.^3
     end
 
     @testset "Floating point arithmetic functions" begin
@@ -206,12 +207,10 @@ llvm_ir(f, args) = sprint(code_llvm, f, Base.typesof(args...))
         @test Tuple(V4F64(v4f64)^2) === v4f64.^2
         @test Tuple(V4F64(v4f64)^3) === v4f64.^3
 
-        #=
         for op in (fma, vifelsebool, muladd)
             @test Tuple(op(V4F64(v4f64), V4F64(v4f64b), V4F64(v4f64c))) ===
                 map(op, v4f64, v4f64b, v4f64c)
         end
-        =#
 
         v = V4F64(v4f64)
         @test v^5 === v * v * v * v * v
@@ -234,7 +233,6 @@ llvm_ir(f, args) = sprint(code_llvm, f, Base.typesof(args...))
             vifelse(signbit(V8I32(v8i32)), V8I32(42), V8I32(v8i32))
         @test vifelse(signbit(V8I32(v8i32)), V8I32(v8i32), 42) ===
             vifelse(signbit(V8I32(v8i32)), V8I32(v8i32), V8I32(42))
-        #=
         for op in (muladd,)
             @test op(42, 42, V8I32(v8i32)) ===
                 op(V8I32(42), V8I32(42), V8I32(v8i32))
@@ -249,7 +247,6 @@ llvm_ir(f, args) = sprint(code_llvm, f, Base.typesof(args...))
             @test op(V8I32(v8i32), 42, 42) ===
                 op(V8I32(v8i32), V8I32(42), V8I32(42))
         end
-        =#
 
         for op in (
                 ==, !=, <, <=, >, >=,
@@ -283,7 +280,7 @@ llvm_ir(f, args) = sprint(code_llvm, f, Base.typesof(args...))
             @test op(V8I32(v8i32)) === op(v8i32)
         end
         #@test all(V8I32(v8i32)) == reduce(&, v8i32)
-        # @test any(V8I32(v8i32)) == reduce(|, v8i32)
+        #@test any(V8I32(v8i32)) == reduce(|, v8i32)
 
         for op in (maximum, minimum, sum, prod)
             @test op(V4F64(v4f64)) === op(v4f64)
