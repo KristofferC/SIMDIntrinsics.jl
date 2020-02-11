@@ -6,25 +6,24 @@ module LLVM
 import ..SIMDIntrinsics: VE, LVec, IntegerTypes, IntTypes, UIntTypes, FloatingTypes
 
 const d = Dict{DataType, String}(
-    Bool    => "i8",
-    Int8    => "i8",
-    Int16   => "i16",
-    Int32   => "i32",
-    Int64   => "i64",
-    Int128  => "i128",
+    Bool         => "i8",
+    Int8         => "i8",
+    Int16        => "i16",
+    Int32        => "i32",
+    Int64        => "i64",
+    Int128       => "i128",
 
-    UInt8   => "i8",
-    UInt16  => "i16",
-    UInt32  => "i32",
-    UInt64  => "i64",
-    UInt128 => "i128",
+    UInt8        => "i8",
+    UInt16       => "i16",
+    UInt32       => "i32",
+    UInt64       => "i64",
+    UInt128      => "i128",
 
-    #Float16 => "half",
-    Float32 => "float",
-    Float64 => "double",
+    #Float16     => "half",
+    Float32      => "float",
+    Float64      => "double",
     Ptr{Float64} => "i64"
 )
-
 
 # TODO: Clean up
 suffix(N::Integer, ::Type{Ptr{T}}) where {T} = "v$(N)p0$(T<:IntegerTypes ? "i" : "f")$(8*sizeof(T))"
@@ -119,20 +118,19 @@ end
 # Binary operators  #
 #####################
 
-# (signed, unsigned, float)
 const BINARY_OPS = [
-    (:add, :add, :fadd)
-    (:sub, :sub, :fsub)
-    (:mul, :mul, :fmul)
-    (:sdiv, :udiv, :fdiv)
-    (:srem, :urem, :frem)
+    (:add  , :add   , :fadd)
+    (:sub  , :sub   , :fsub)
+    (:mul  , :mul   , :fmul)
+    (:sdiv , :udiv  , :fdiv)
+    (:srem , :urem  , :frem)
     # Bitwise
-    (:shl, :shl)
-    (:ashr, :ashr)
-    (:lshr, :lshr)
-    (:and, :and)
-    (:or, :or,)
-    (:xor, :xor)
+    (:shl  , :shl)
+    (:ashr , :ashr)
+    (:lshr , :lshr)
+    (:and  , :and)
+    (:or   , :or)
+    (:xor  , :xor)
 ]
 
 for fs in BINARY_OPS
@@ -382,7 +380,7 @@ end
 const CONVERSION_OPS_SIZE_CHANGE_SAME_ELEMENTS = [
     ((:trunc, :fptrunc), >),
     ((:zext,  :fpext),   <),
-    ((:sext, ),          <),
+    ((:sext,),           <),
 ]
 
 for (fs, criteria) in CONVERSION_OPS_SIZE_CHANGE_SAME_ELEMENTS
@@ -404,10 +402,10 @@ for (fs, criteria) in CONVERSION_OPS_SIZE_CHANGE_SAME_ELEMENTS
 end
 
 const CONVERSION_TYPES = [
-    (:fptoui, (FloatingTypes, UIntTypes)),
-    (:fptosi, (FloatingTypes, IntTypes)),
-    (:uitofp, (UIntTypes, FloatingTypes)),
-    (:sitofp, (IntTypes, FloatingTypes)),
+    (:fptoui , (FloatingTypes , UIntTypes))     ,
+    (:fptosi , (FloatingTypes , IntTypes))      ,
+    (:uitofp , (UIntTypes     , FloatingTypes)) ,
+    (:sitofp , (IntTypes      , FloatingTypes)) ,
 ]
 
 for (f, (from, to)) in CONVERSION_TYPES
@@ -461,12 +459,12 @@ end
 ##################################
 
 const HORZ_REDUCTION_OPS = [
-    (:and, :and)
-    (:or, :or)
-    (:mul, :mul)
-    (:add, :add)
-    (:smax, :umax, :fmax)
-    (:smin, :umin, :fmin)
+    (:and  , :and)
+    (:or   , :or)
+    (:mul  , :mul)
+    (:add  , :add)
+    (:smax , :umax , :fmax)
+    (:smin , :umin , :fmin)
 ]
 
 for fs in HORZ_REDUCTION_OPS

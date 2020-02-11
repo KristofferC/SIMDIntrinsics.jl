@@ -12,11 +12,9 @@ const ScalarTypes = Union{IntegerTypes, FloatingTypes}
 
 include("LLVM.jl")
 include("SIMD.jl")
-include("intrin/immintrin.jl")
 
 using .SIMD
 
 export Vec, vload, vstore, vgather, vscatter, vload, shufflevector, vifelse, valloc, VecRange
-
 
 end

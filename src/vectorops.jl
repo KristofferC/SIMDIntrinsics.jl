@@ -4,6 +4,7 @@ using Base: Slice, ScalarIndex
     ContiguousSubArray{T,N,P,I,L}
 Like `Base.FastContiguousSubArray` but without requirement for linear
 indexing (i.e., type parameter `L` can be `false`).
+
 # Examples
 
 ```
@@ -23,12 +24,14 @@ ContiguousSubArray{T,N,P,
 
 """
     ContiguousArray{T,N}
+
 Array types with contiguous first dimension.
 """
 ContiguousArray{T,N} = Union{DenseArray{T,N}, ContiguousSubArray{T,N}}
 
 """
     FastContiguousArray{T,N}
+
 This is the type of arrays that `pointer(A, i)` works.
 """
 FastContiguousArray{T,N} = Union{DenseArray{T,N}, Base.FastContiguousSubArray{T,N}}
@@ -39,9 +42,12 @@ export VecRange
 
 """
     VecRange{N}(i::Int)
+    
 Analogous to `UnitRange` but for loading SIMD vector of width `N` at
 index `i`.
+
 # Examples
+
 ```jldoctest
 julia> xs = ones(4);
 julia> xs[VecRange{4}(1)]  # calls `vload(Vec{4,Float64}, xs, 1)`

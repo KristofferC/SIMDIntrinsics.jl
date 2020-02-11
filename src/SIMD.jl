@@ -12,19 +12,20 @@ struct Vec{N, T <: ScalarTypes}
 end
 
 # Constructors
-Vec(v::NTuple{N, T}) where {N, T <: ScalarTypes} = Vec(VE.(v))
-Vec(v::Vararg{T, N}) where {N, T <: ScalarTypes} = Vec(v)
-Vec(v::Vec) = v
+@inline Vec(v::NTuple{N, T}) where {N, T <: ScalarTypes} = Vec(VE.(v))
+@inline Vec(v::Vararg{T, N}) where {N, T <: ScalarTypes} = Vec(v)
+@inline Vec(v::Vec) = v
 
-constantvector(v::T1, ::Type{Vec{N, T2}}) where {N, T1, T2} =
-    Vec(LLVM.constantvector(convert(T2, v), LLVM.LVec{N, T2}))
-constantvector(v::T1, ::Type{Vec{N, T2}}) where {N, T1<:IntegerTypes, T2<:IntegerTypes} =
-    Vec(LLVM.constantvector(v % T2, LLVM.LVec{N, T2}))
+# No throwing versions of convert
+@inline _unsafe_convert(::Type{T}, v) where {T <: IntegerTypes} = v % T
+@inline _unsafe_convert(::Type{T}, v) where {T <: FloatingTypes} = convert(T, v)
+@inline constantvector(v::T1, ::Type{Vec{N, T2}}) where {N, T1, T2} =
+    Vec(LLVM.constantvector(_unsafe_convert(T2, v), LLVM.LVec{N, T2}))
 
-Vec{N, T}(v::Vec{N, T}) where {N, T<:ScalarTypes} = v
-Vec{N, T1}(v::T2) where {N, T1<:ScalarTypes, T2<:ScalarTypes} = constantvector(v, Vec{N, T1})
-Vec{N, T1}(v::Vec{N, T2}) where {N, T1<:IntegerTypes, T2<:IntegerTypes} = convert(Vec{N, T1}, v)
-
+@inline Vec{N, T}(v::Vec{N, T}) where {N, T<:IntegerTypes} = v
+@inline Vec{N, T}(v::Vec{N, T}) where {N, T<:FloatingTypes} = v
+@inline Vec{N, T1}(v::T2) where {N, T1<:ScalarTypes, T2<:ScalarTypes} = constantvector(v, Vec{N, T1})
+@inline Vec{N, T1}(v::Vec{N, T2}) where {N, T1<:IntegerTypes, T2<:IntegerTypes} = convert(Vec{N, T1}, v)
 
 include("vectorops.jl")
 
@@ -76,10 +77,10 @@ Base.size(  ::Type{Vec{N,T}}) where {N,T} = (N,)
 Base.size(  ::Type{Vec{N,T}}, n::Integer) where {N,T} = n > N ? 1 : (N,)[n]
 
 Base.eltype(V::Vec) = eltype(typeof(V))
-Base.ndims( V::Vec) = ndims(typeof(V))
+Base.ndims(V::Vec) = ndims(typeof(V))
 Base.length(V::Vec) = length(typeof(V))
-Base.size(  V::Vec) = size(typeof(V))
-Base.size(  V::Vec, n::Integer) = size(typeof(V), n)
+Base.size(V::Vec) = size(typeof(V))
+Base.size(V::Vec, n::Integer) = size(typeof(V), n)
 
 function Base.show(io::IO, v::Vec{N,T}) where {N,T}
     print(io, "<$N x $T>[")
@@ -97,7 +98,7 @@ end
 
 @inline function Base.setindex(v::Vec{N,T}, x, i::IntegerTypes) where {N,T}
     @boundscheck checkbounds(v, i)
-    Vec(LLVM.insertelement(v.data, convert(T, x), i-1))
+    Vec(LLVM.insertelement(v.data, _unsafe_convert(T, x), i-1))
 end
 
 Base.zero(::Type{Vec{N,T}}) where {N, T} = Vec{N,T}(zero(T))
@@ -114,28 +115,28 @@ Base.reinterpret(::Type{T}, v::Vec) where {T} = LLVM.bitcast(T, v.data)
 ###################
 
 const UNARY_OPS = [
-    (:sqrt, FloatingTypes, LLVM.sqrt),
-    (:sin, FloatingTypes, LLVM.sin),
-    (:trunc, FloatingTypes, LLVM.trunc),
-    (:cos, FloatingTypes, LLVM.cos),
-    (:exp, FloatingTypes, LLVM.exp),
-    (:exp2, FloatingTypes, LLVM.exp2),
-    (:log, FloatingTypes, LLVM.log),
-    (:log10, FloatingTypes, LLVM.log10),
-    (:log2, FloatingTypes, LLVM.log2),
-    (:abs, FloatingTypes, LLVM.fabs),
-    (:floor, FloatingTypes, LLVM.floor),
-    (:ceil, FloatingTypes, LLVM.ceil),
-    # (:rint, FloatingTypes, LLVM),
-    # (:nearbyint, FloatingTypes, LLVM),
-    (:round, FloatingTypes, LLVM.round),
+    (:sqrt           , FloatingTypes , LLVM.sqrt)       ,
+    (:sin            , FloatingTypes , LLVM.sin)        ,
+    (:trunc          , FloatingTypes , LLVM.trunc)      ,
+    (:cos            , FloatingTypes , LLVM.cos)        ,
+    (:exp            , FloatingTypes , LLVM.exp)        ,
+    (:exp2           , FloatingTypes , LLVM.exp2)       ,
+    (:log            , FloatingTypes , LLVM.log)        ,
+    (:log10          , FloatingTypes , LLVM.log10)      ,
+    (:log2           , FloatingTypes , LLVM.log2)       ,
+    (:abs            , FloatingTypes , LLVM.fabs)       ,
+    (:floor          , FloatingTypes , LLVM.floor)      ,
+    (:ceil           , FloatingTypes , LLVM.ceil)       ,
+    # (:rint         , FloatingTypes , LLVM)            ,
+    # (:nearbyint    , FloatingTypes , LLVM)            ,
+    (:round          , FloatingTypes , LLVM.round)      ,
 
-    # (:bitreverse, IntegerTypes, LLVM.bitreverse),
-    (:bswap, IntegerTypes, LLVM.bswap),
-    (:count_ones, IntegerTypes, LLVM.ctpop),
-    (:leading_zeros, IntegerTypes, LLVM.ctlz),
-    (:trailing_zeros, IntegerTypes, LLVM.cttz),
-    (:~, IntegerTypes, LLVM.or)
+    # (:bitreverse   , IntegerTypes  , LLVM.bitreverse) ,
+    (:bswap          , IntegerTypes  , LLVM.bswap)      ,
+    (:count_ones     , IntegerTypes  , LLVM.ctpop)      ,
+    (:leading_zeros  , IntegerTypes  , LLVM.ctlz)       ,
+    (:trailing_zeros , IntegerTypes  , LLVM.cttz)       ,
+    (:~              , IntegerTypes  , LLVM.or)
 ]
 
 for (op, constraint, llvmop) in UNARY_OPS
@@ -180,46 +181,46 @@ end
 ####################
 
 const BINARY_OPS = [
-    (:+, IntegerTypes, LLVM.add)
-    (:-, IntegerTypes, LLVM.sub)
-    (:*, IntegerTypes, LLVM.mul)
-    (:div, UIntTypes, LLVM.udiv)
-    (:div, IntTypes, LLVM.sdiv)
-    (:rem, UIntTypes, LLVM.urem)
-    (:rem, IntTypes, LLVM.srem)
+    (:+        , IntegerTypes  , LLVM.add)
+    (:-        , IntegerTypes  , LLVM.sub)
+    (:*        , IntegerTypes  , LLVM.mul)
+    (:div      , UIntTypes     , LLVM.udiv)
+    (:div      , IntTypes      , LLVM.sdiv)
+    (:rem      , UIntTypes     , LLVM.urem)
+    (:rem      , IntTypes      , LLVM.srem)
 
-    (:+, FloatingTypes, LLVM.fadd)
-    (:-, FloatingTypes, LLVM.fsub)
-    (:*, FloatingTypes, LLVM.fmul)
-    (:^, FloatingTypes, LLVM.pow)
-    (:/, FloatingTypes, LLVM.fdiv)
-    (:rem, FloatingTypes, LLVM.frem)
-    (:min, FloatingTypes, LLVM.minnum)
-    (:max, FloatingTypes, LLVM.maxnum)
-    (:copysign, FloatingTypes, LLVM.copysign)
+    (:+        , FloatingTypes , LLVM.fadd)
+    (:-        , FloatingTypes , LLVM.fsub)
+    (:*        , FloatingTypes , LLVM.fmul)
+    (:^        , FloatingTypes , LLVM.pow)
+    (:/        , FloatingTypes , LLVM.fdiv)
+    (:rem      , FloatingTypes , LLVM.frem)
+    (:min      , FloatingTypes , LLVM.minnum)
+    (:max      , FloatingTypes , LLVM.maxnum)
+    (:copysign , FloatingTypes , LLVM.copysign)
 
-    (:~, IntegerTypes, LLVM.xor)
-    (:&, IntegerTypes, LLVM.and)
-    (:|, IntegerTypes, LLVM.or)
-    (:⊻, IntegerTypes, LLVM.xor)
+    (:~        , IntegerTypes  , LLVM.xor)
+    (:&        , IntegerTypes  , LLVM.and)
+    (:|        , IntegerTypes  , LLVM.or)
+    (:⊻        , IntegerTypes  , LLVM.xor)
 
-    (:(==), IntegerTypes, LLVM.icmp_eq)
-    (:(!=), IntegerTypes, LLVM.icmp_ne)
-    (:(>), IntTypes, LLVM.icmp_sgt)
-    (:(>=), IntTypes, LLVM.icmp_sge)
-    (:(<), IntTypes, LLVM.icmp_slt)
-    (:(<=), IntTypes, LLVM.icmp_sle)
-    (:(>), UIntTypes, LLVM.icmp_ugt)
-    (:(>=), UIntTypes, LLVM.icmp_uge)
-    (:(<), UIntTypes, LLVM.icmp_ult)
-    (:(<=), UIntTypes, LLVM.icmp_ule)
+    (:(==)     , IntegerTypes  , LLVM.icmp_eq)
+    (:(!=)     , IntegerTypes  , LLVM.icmp_ne)
+    (:(>)      , IntTypes      , LLVM.icmp_sgt)
+    (:(>=)     , IntTypes      , LLVM.icmp_sge)
+    (:(<)      , IntTypes      , LLVM.icmp_slt)
+    (:(<=)     , IntTypes      , LLVM.icmp_sle)
+    (:(>)      , UIntTypes     , LLVM.icmp_ugt)
+    (:(>=)     , UIntTypes     , LLVM.icmp_uge)
+    (:(<)      , UIntTypes     , LLVM.icmp_ult)
+    (:(<=)     , UIntTypes     , LLVM.icmp_ule)
 
-    (:(==), FloatingTypes, LLVM.fcmp_oeq)
-    (:(!=), FloatingTypes, LLVM.fcmp_une)
-    (:(>), FloatingTypes, LLVM.fcmp_ogt)
-    (:(>=), FloatingTypes, LLVM.fcmp_oge)
-    (:(<), FloatingTypes, LLVM.fcmp_olt)
-    (:(<=), FloatingTypes, LLVM.fcmp_ole)
+    (:(==)     , FloatingTypes , LLVM.fcmp_oeq)
+    (:(!=)     , FloatingTypes , LLVM.fcmp_une)
+    (:(>)      , FloatingTypes , LLVM.fcmp_ogt)
+    (:(>=)     , FloatingTypes , LLVM.fcmp_oge)
+    (:(<)      , FloatingTypes , LLVM.fcmp_olt)
+    (:(<=)     , FloatingTypes , LLVM.fcmp_ole)
 ]
 
 for (op, constraint, llvmop) in BINARY_OPS
@@ -252,21 +253,6 @@ _signed(::Type{Float64}) = Int64
 @inline Base.signbit(x::Vec{N, T}) where {N, T <:FloatingTypes} = 
     signbit(reinterpret(Vec{N, _signed(T)}, x))
 
-for (op, constraint) in [BINARY_OPS; 
-        (:flipsign, ScalarTypes)
-        (:copysign, ScalarTypes)
-        (:signbit, ScalarTypes)
-        (:min, IntegerTypes)
-        (:max, IntegerTypes,
-        (:^, IntegerTypes))
-    ]
-    @eval @inline function (Base.$op)(x::T2, y::Vec{N, T}) where {N, T2<:ScalarTypes, T <: $constraint}
-        Base.$op(Vec{N, T}(T(x)), y)
-    end
-    @eval @inline function (Base.$op)(x::Vec{N, T}, y::T2) where {N, T2 <:ScalarTypes, T <: $constraint}
-        Base.$op(x, Vec{N, T}(T(y)))
-    end
-end
 
 # Bitshifts
 # See https://github.com/JuliaLang/julia/blob/7426625b5c07b0d93110293246089a259a0a677d/src/intrinsics.cpp#L1179-L1196
@@ -310,6 +296,7 @@ end
     vifelse(0 <= y, x >>> unsigned(y), x << unsigned(-y))
 
 # Check these!
+#=
 for v in (:<<, :>>, :>>>)
     @eval begin
         @inline Base.$v(x::Vec{N,T}, y::ScalarTypes) where {N, T} = $v(x, Vec{N,T}(y))
@@ -318,41 +305,58 @@ for v in (:<<, :>>, :>>>)
             $v(x, convert(Vec{N, Int}, y))
     end
 end
+=#
 
+# Vectorize binary functions
+for (op, constraint) in [BINARY_OPS; 
+        (:flipsign , ScalarTypes)
+        (:copysign , ScalarTypes)
+        (:signbit  , ScalarTypes)
+        (:min      , IntegerTypes)
+        (:max      , IntegerTypes)
+        (:^        , IntegerTypes)
+        (:<<       , IntegerTypes)
+        (:>>       , IntegerTypes)
+        (:>>>      , IntegerTypes)
+    ]
+    @eval @inline function (Base.$op)(x::T2, y::Vec{N, T}) where {N, T2<:ScalarTypes, T <: $constraint}
+        Base.$op(Vec{N, T}(x), y)
+    end
+    @eval @inline function (Base.$op)(x::Vec{N, T}, y::T2) where {N, T2 <:ScalarTypes, T <: $constraint}
+        Base.$op(x, Vec{N, T}(x))
+    end
+end
 
 #####################
 # Ternary operators #
 #####################
 
 @inline vifelse(v::Bool, v1::Vec{N, T}, v2::Vec{N, T}) where {N, T} = ifelse(v, v1, v2)
+@inline vifelse(v::Bool, v1::Vec{N, T}, v2::ScalarTypes) where {N, T} = ifelse(v, v1, Vec{N,T}(v2))
+@inline vifelse(v::Bool, v1::ScalarTypes, v2::Vec{N, T}) where {N, T} = ifelse(v, Vec{N,T}(v1), v2)
+
 @inline vifelse(v::Bool, v1::T, v2::T) where {T} = ifelse(v, v1, v2)
 @inline vifelse(v::Vec{N, Bool}, v1::Vec{N, T}, v2::Vec{N, T}) where {N, T} =
     Vec(LLVM.select(v.data, v1.data, v2.data))
 @inline vifelse(v::Vec{N, Bool}, v1::T2, v2::Vec{N, T}) where {N, T, T2 <:ScalarTypes} = vifelse(v, Vec{N, T}(v1), v2)
 @inline vifelse(v::Vec{N, Bool}, v1::Vec{N, T}, v2::T2) where {N, T, T2 <:ScalarTypes} = vifelse(v, v1, Vec{N, T}(v2))
 
-# fma, muladd
+# fma, muladd and vectorization of these
 for (op, llvmop) in [(:fma, LLVM.fma), (:muladd, LLVM.fmuladd)]
     @eval begin
         @inline Base.$op(a::Vec{N, T}, b::Vec{N, T}, c::Vec{N, T}) where {N,T<:FloatingTypes} =
             Vec($llvmop(a.data, b.data, c.data))
-        @inline Base.$op(s1::ScalarTypes, v2::Vec{N,T},
-                v3::Vec{N,T}) where {N,T<:FloatingTypes} =
+        @inline Base.$op(s1::ScalarTypes, v2::Vec{N,T}, v3::Vec{N,T}) where {N,T<:FloatingTypes} =
             $op(Vec{N,T}(s1), v2, v3)
-        @inline Base.$op(v1::Vec{N,T}, s2::ScalarTypes,
-                v3::Vec{N,T}) where {N,T<:FloatingTypes} =
+        @inline Base.$op(v1::Vec{N,T}, s2::ScalarTypes, v3::Vec{N,T}) where {N,T<:FloatingTypes} =
             $op(v1, Vec{N,T}(s2), v3)
-        @inline Base.$op(s1::ScalarTypes, s2::ScalarTypes,
-                v3::Vec{N,T}) where {N,T<:FloatingTypes} =
+        @inline Base.$op(s1::ScalarTypes, s2::ScalarTypes, v3::Vec{N,T}) where {N,T<:FloatingTypes} =
             $op(Vec{N,T}(s1), Vec{N,T}(s2), v3)
-        @inline Base.$op(v1::Vec{N,T}, v2::Vec{N,T},
-                s3::ScalarTypes) where {N,T<:FloatingTypes} =
+        @inline Base.$op(v1::Vec{N,T}, v2::Vec{N,T}, s3::ScalarTypes) where {N,T<:FloatingTypes} =
             $op(v1, v2, Vec{N,T}(s3))
-        @inline Base.$op(s1::ScalarTypes, v2::Vec{N,T},
-                s3::ScalarTypes) where {N,T<:FloatingTypes} =
+        @inline Base.$op(s1::ScalarTypes, v2::Vec{N,T}, s3::ScalarTypes) where {N,T<:FloatingTypes} =
             $op(Vec{N,T}(s1), v2, Vec{N,T}(s3))
-        @inline Base.$op(v1::Vec{N,T}, s2::ScalarTypes,
-                s3::ScalarTypes) where {N,T<:FloatingTypes} =
+        @inline Base.$op(v1::Vec{N,T}, s2::ScalarTypes, s3::ScalarTypes) where {N,T<:FloatingTypes} =
             $op(v1, Vec{N,T}(s2), Vec{N,T}(s3))
     end
 end
@@ -362,18 +366,18 @@ end
 # Reductions #
 ##############
 const HORZ_REDUCTION_OPS = [
-    (&, IntegerTypes, LLVM.reduce_and)
-    (|, IntegerTypes, LLVM.reduce_and)
-    (max, IntTypes, LLVM.reduce_smax)
-    (max, UIntTypes,LLVM.reduce_umax)
-    (max, FloatingTypes, LLVM.reduce_fmax)
-    (min, IntTypes, LLVM.reduce_smin)
-    (min, UIntTypes, LLVM.reduce_umin)
-    (min, FloatingTypes, LLVM.reduce_fmin)
-    (+, IntegerTypes, LLVM.reduce_add)
-    (*, IntegerTypes, LLVM.reduce_mul)
-    (+, FloatingTypes, LLVM.reduce_fadd)
-    (*, FloatingTypes, LLVM.reduce_fmul)
+    (&   , IntegerTypes  , LLVM.reduce_and)
+    (|   , IntegerTypes  , LLVM.reduce_and)
+    (max , IntTypes      , LLVM.reduce_smax)
+    (max , UIntTypes     , LLVM.reduce_umax)
+    (max , FloatingTypes , LLVM.reduce_fmax)
+    (min , IntTypes      , LLVM.reduce_smin)
+    (min , UIntTypes     , LLVM.reduce_umin)
+    (min , FloatingTypes , LLVM.reduce_fmin)
+    (+   , IntegerTypes  , LLVM.reduce_add)
+    (*   , IntegerTypes  , LLVM.reduce_mul)
+    (+   , FloatingTypes , LLVM.reduce_fadd)
+    (*   , FloatingTypes , LLVM.reduce_fmul)
 ]
 
 for (op, constraint, llvmop) in HORZ_REDUCTION_OPS
