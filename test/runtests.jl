@@ -1,4 +1,4 @@
-using SIMDIntrinsics
+using SIMD
 using Test
 
 using Test, InteractiveUtils
@@ -90,7 +90,8 @@ llvm_ir(f, args) = sprint(code_llvm, f, Base.typesof(args...))
         global const v8i32c = map(x->Int32(x*2), v8i32)
 
         notbool(x) = !(x>=typeof(x)(0))
-        for op in (~, +, -, abs, notbool, sign, signbit)
+        for op in (~, +, -, abs, notbool, sign, signbit, count_ones, count_zeros,
+                   leading_ones, leading_zeros, trailing_ones, trailing_zeros)
             @test Tuple(op(V8I32(v8i32))) == map(op, v8i32)
         end
 
@@ -413,7 +414,7 @@ llvm_ir(f, args) = sprint(code_llvm, f, Base.typesof(args...))
                 idx = VecRange{length(VT)}(1)
                 @test mat[idx, 1] === VT(Tuple(1:length(VT)))
                 @test mat[idx, 2] === VT(Tuple(1:length(VT)))
-                if mat isa SIMDIntrinsics.SIMD.FastContiguousArray
+                if mat isa SIMD.SIMDVec.FastContiguousArray
                     @test mat[idx] === VT(Tuple(1:length(VT)))
                 else
                     err = try

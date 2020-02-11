@@ -3,7 +3,7 @@ module LLVM
 
 # TODO: fastmath flags
 
-import ..SIMDIntrinsics: VE, LVec, IntegerTypes, IntTypes, UIntTypes, FloatingTypes
+import ..SIMD: VE, LVec, IntegerTypes, IntTypes, UIntTypes, FloatingTypes
 
 const d = Dict{DataType, String}(
     Bool         => "i8",
