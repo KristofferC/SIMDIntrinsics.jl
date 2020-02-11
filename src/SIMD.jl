@@ -56,8 +56,6 @@ include("vectorops.jl")
         elseif T2 <: FloatingTypes
             if sizeof(T1) < sizeof(T2)
                 return Vec(LLVM.fptrunc(LLVM.LVec{N, T1}, v.data))
-            elseif sizeof(T1) == sizeof(T2)
-                return Vec(LLVM.bitcast(LLVM.LVec{N, T1}, v.data))
             else
                 return Vec(LLVM.fpext(LLVM.LVec{N, T1}, v.data))
             end
