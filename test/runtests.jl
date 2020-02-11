@@ -108,11 +108,9 @@ llvm_ir(f, args) = sprint(code_llvm, f, Base.typesof(args...))
 
         for op in (<<, >>, >>>)
             for v in (V8I32(v8i32), V8I64(v8i64))
-                for z in (3, UInt(3), 10000)
+                for z in (3, UInt(3), Int32(10000), UInt8(4))
                     @test Tuple(op(v, z)) === map(x->op(x,z), Tuple(v))
-                    if z isa Int
-                        @test Tuple(op(v, -z)) === map(x->op(x,-z), Tuple(v))
-                    end
+                    @test Tuple(op(v, -z)) === map(x->op(x,-z), Tuple(v))
                     @test Tuple(op(v, v)) === map(op, Tuple(v), Tuple(v))
                 end
             end

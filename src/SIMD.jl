@@ -293,17 +293,15 @@ end
 @inline Base.:>>>(x::Vec{N, T1}, y::Vec{N, Int}) where {N, T1<:IntegerTypes} =
     vifelse(0 <= y, x >>> unsigned(y), x << unsigned(-y))
 
-# Check these!
-#=
 for v in (:<<, :>>, :>>>)
     @eval begin
         @inline Base.$v(x::Vec{N,T}, y::ScalarTypes) where {N, T} = $v(x, Vec{N,T}(y))
+        @inline Base.$v(x::Vec{N,T}, y::T2) where {N, T<:IntegerTypes, T2<:UIntTypes} = $v(x, Vec{N,T2}(y))
         @inline Base.$v(x::ScalarTypes, y::Vec{N,T}) where {N, T} = $v(Vec{N,T}(x), y)
         @inline Base.$v(x::Vec{N,T1}, y::Vec{N,T2}) where {N, T1<:IntegerTypes, T2<:IntegerTypes} =
             $v(x, convert(Vec{N, Int}, y))
     end
 end
-=#
 
 # Vectorize binary functions
 for (op, constraint) in [BINARY_OPS; 
@@ -321,7 +319,7 @@ for (op, constraint) in [BINARY_OPS;
         Base.$op(Vec{N, T}(x), y)
     end
     @eval @inline function (Base.$op)(x::Vec{N, T}, y::T2) where {N, T2 <:ScalarTypes, T <: $constraint}
-        Base.$op(x, Vec{N, T}(x))
+        Base.$op(x, Vec{N, T}(y))
     end
 end
 
