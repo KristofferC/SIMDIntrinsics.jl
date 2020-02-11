@@ -82,8 +82,6 @@ end
 @propagate_inbounds Base.setindex!(a::FastContiguousArray{T,1}, v::Vec{N, T}, idx::VecRange{N}) where {N,T} =
     vstore(v, a, idx.i)
 
-
-export valloc
 function valloc(::Type{T}, N::Int, sz::Int) where T
     @assert N > 0
     @assert sz >= 0
@@ -112,7 +110,7 @@ function valloc(f, ::Type{T}, N::Int, sz::Int) where T
 end
 
 @inline function _get_vec_pointers(a, idx::Vec{N, Int}) where {N}
-    p = fill(Int(pointer(a)), Vec{N, Int})
+    p = Vec{N, Int}(Int(pointer(a)))
     ptrs = p + (idx - 1) * sizeof(eltype(a))
 end
 

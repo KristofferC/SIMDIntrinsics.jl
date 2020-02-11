@@ -1,7 +1,6 @@
 # LLVM operations and intrinsics
 module LLVM
 
-# TODO masked loads and stores
 # TODO: fastmath flags
 
 import ..SIMDIntrinsics: VE, LVec, IntegerTypes, IntTypes, UIntTypes, FloatingTypes
@@ -33,11 +32,92 @@ suffix(N::Integer, ::Type{T}) where {T} = "v$(N)$(T<:IntegerTypes ? "i" : "f")$(
 suffix(::Type{T}) where {T} = "$(T<:IntegerTypes ? "i" : "f")$(8*sizeof(T))"
 llvm_name(llvmf, N, T) = string("llvm", ".", llvmf, ".", suffix(N, T))
 
+
+####################
+# Unary operators  #
+####################
+
+const UNARY_INTRINSICS = [
+    :sqrt
+    :sin
+    :cos
+    :exp
+    :trunc
+    :exp2
+    :log
+    :log10
+    :log2
+    :fabs
+    :floor
+    :ceil
+    :rint
+    :nearbyint
+    :round
+]
+
+for f in UNARY_INTRINSICS
+    @eval begin
+    @generated function $(f)(x::LVec{N, T}) where {N, T <: FloatingTypes}
+        ff = llvm_name($(QuoteNode(f)), N, T)
+        return :(
+            $(Expr(:meta, :inline));
+            ccall($ff, llvmcall, LVec{N, T}, (LVec{N, T},), x)
+        )
+    end
+    end
+end
+
+# fneg
+@generated function fneg(x::LVec{N, T}) where {N, T<:FloatingTypes}
+    s = """
+    %2 = fneg <$(N) x $(d[T])> %0
+    ret <$(N) x $(d[T])> %2
+    """
+    return :(
+        $(Expr(:meta, :inline));
+        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}}, x)
+    )
+end
+
+const BITMANIPULATION_INTRINSICS = [
+    :bitreverse,
+    :bswap,
+    :ctpop,
+    :ctlz,
+    :cttz,
+    :fshl,
+    :fshr,
+]
+
+for f in BITMANIPULATION_INTRINSICS
+    @eval @generated function $(f)(x::LVec{N, T}) where {N, T <: IntegerTypes}
+        ff = llvm_name($(QuoteNode(f)), N, T)
+        return :(
+            $(Expr(:meta, :inline));
+            ccall($ff, llvmcall, LVec{N, T}, (LVec{N, T},), x)
+        )
+    end
+end
+
+# This is special cased because AFAIU for ~Vec{N, Bool} there is no
+# way to get these -1 passed to LLVM.
+@generated function or(x::LVec{N, T}) where {N, T <: IntegerTypes}
+    ff = llvm_name(:xor, N, T)
+    shfl = join((string(d[T], " ", -1) for i in 1:N), ", ")
+    s = """
+    %res = xor <$N x $(d[T])> %0, <$shfl>
+    ret <$N x $(d[T])> %res
+    """
+    return :(
+        $(Expr(:meta, :inline));
+        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}}, x)
+    )
+end
+
+
 #####################
 # Binary operators  #
 #####################
-
-# Type preserving
 
 # (signed, unsigned, float)
 const BINARY_OPS = [
@@ -71,6 +151,99 @@ for fs in BINARY_OPS
     end
 end
 
+const BINARY_FLOAT_INTRINSICS = [
+    :minnum
+    :maxnum
+    :minimum
+    :maximum
+    :copysign
+    :pow
+    :floor
+    :ceil
+    :trunc
+    :rint
+    :nearbyint
+    :round
+]
+
+for f in BINARY_FLOAT_INTRINSICS
+    @eval @generated function $(f)(x::LVec{N, T}, y::LVec{N, T}) where {N, T <: FloatingTypes}
+        ff = llvm_name($(QuoteNode(f)), N, T)
+        return :(
+            $(Expr(:meta, :inline));
+            ccall($ff, llvmcall, LVec{N, T}, (LVec{N, T}, LVec{N, T}), x, y)
+        )
+    end
+end
+
+# pow, powi
+for (f, constraint) in [(:pow, FloatingTypes), (:powi, IntegerTypes)]
+    @eval @generated function $(f)(x::LVec{N, T1}, y::T2) where {N, T1 <: FloatingTypes, T2 <: $constraint}
+        ff = llvm_name($(QuoteNode(f)), N, T1)
+        return :(
+            $(Expr(:meta, :inline));
+            ccall($ff, llvmcall, LVec{N, T1}, (LVec{N, T1}, T2), x, y)
+        )
+    end
+end
+
+# Comparisons 
+const S_CMP_FLAGS = [:eq ,:ne, :sgt ,:sge ,:slt ,:sle]
+const U_CMP_FLAGS = [:eq ,:ne ,:ugt ,:uge ,:ult ,:ule]
+const FCMP_FLAGS = [:false ,:oeq ,:ogt ,:oge ,:olt ,:ole ,:one ,:ord ,:ueq ,:ugt ,:uge ,:ult ,:ule ,:une ,:uno , :true]
+
+for (f, constraint, flags) in zip(("icmp", "icmp", "fcmp"), (IntTypes, UIntTypes, FloatingTypes), (S_CMP_FLAGS, U_CMP_FLAGS, FCMP_FLAGS))
+    for flag in flags
+        ftot = Symbol(string(f, "_", flag))
+        @eval @generated function $ftot(x::LVec{N, T}, y::LVec{N, T}) where {N, T <: $constraint}
+            fflag = $(QuoteNode(flag))
+            ff = $(QuoteNode(f))
+            s = """
+            %3 = $ff $(fflag) <$(N) x $(d[T])> %0, %1
+            %4 = sext <$(N) x i1> %3 to <$(N) x i8>
+            ret <$(N) x i8> %4
+            """
+            return :(
+                $(Expr(:meta, :inline));
+                Base.llvmcall($s, LVec{N, Bool}, Tuple{LVec{N, T}, LVec{N, T}}, x, y)
+            )
+        end
+    end
+end
+
+
+#####################
+# Ternary operators #
+#####################
+
+@generated function select(cond::LVec{N, Bool}, x::LVec{N, T}, y::LVec{N, T}) where {N, T}
+    s = """
+    %cond = trunc <$(N) x i8> %0 to <$(N) x i1>
+    %res = select <$N x i1> %cond, <$N x $(d[T])> %1, <$N x $(d[T])> %2
+    ret <$N x $(d[T])> %res
+    """
+    return :(
+        $(Expr(:meta, :inline));
+        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, Bool}, LVec{N, T}, LVec{N, T}}, cond, x, y)
+    )
+end
+
+const MULADD_INTRINSICS = [
+    :fmuladd,
+    :fma,
+]
+
+for f in MULADD_INTRINSICS
+    @eval @generated function $(f)(a::LVec{N, T}, b::LVec{N, T}, c::LVec{N, T}) where {N, T<:FloatingTypes}
+        ff = llvm_name($(QuoteNode(f)), N, T)
+        return :(
+            $(Expr(:meta, :inline));
+            ccall($ff, llvmcall, LVec{N, T}, (LVec{N, T}, LVec{N, T}, LVec{N, T}), a, b, c)
+        )
+    end
+end
+
+
 ################
 # Load / store #
 ################
@@ -99,6 +272,7 @@ end
         Base.llvmcall($s, Cvoid, Tuple{LVec{N, T}, Ptr{T}}, x, ptr)
     )
 end
+
 
 ####################
 # Gather / Scatter #
@@ -204,12 +378,11 @@ end
 #########################
 # Conversion Operations #
 #########################
-# Conversions
 
 const CONVERSION_OPS_SIZE_CHANGE_SAME_ELEMENTS = [
     ((:trunc, :fptrunc), >),
     ((:zext,  :fpext),   <),
-    ((:sext, ),             <),
+    ((:sext, ),          <),
 ]
 
 for (fs, criteria) in CONVERSION_OPS_SIZE_CHANGE_SAME_ELEMENTS
@@ -283,195 +456,9 @@ end
 end
 
 
-###############
-# Comparisons #
-###############
-
-const S_CMP_FLAGS = [:eq ,:ne, :sgt ,:sge ,:slt ,:sle]
-const U_CMP_FLAGS = [:eq ,:ne ,:ugt ,:uge ,:ult ,:ule]
-const FCMP_FLAGS = [:false ,:oeq ,:ogt ,:oge ,:olt ,:ole ,:one ,:ord ,:ueq ,:ugt ,:uge ,:ult ,:ule ,:une ,:uno , :true]
-
-for (f, constraint, flags) in zip(("icmp", "icmp", "fcmp"), (IntTypes, UIntTypes, FloatingTypes), (S_CMP_FLAGS, U_CMP_FLAGS, FCMP_FLAGS))
-    for flag in flags
-        ftot = Symbol(string(f, "_", flag))
-        @eval @generated function $ftot(x::LVec{N, T}, y::LVec{N, T}) where {N, T <: $constraint}
-            fflag = $(QuoteNode(flag))
-            ff = $(QuoteNode(f))
-            s = """
-            %3 = $ff $(fflag) <$(N) x $(d[T])> %0, %1
-            %4 = sext <$(N) x i1> %3 to <$(N) x i8>
-            ret <$(N) x i8> %4
-            """
-            return :(
-                $(Expr(:meta, :inline));
-                Base.llvmcall($s, LVec{N, Bool}, Tuple{LVec{N, T}, LVec{N, T}}, x, y)
-            )
-        end
-    end
-end
-
-####################
-# Unary operators  #
-####################
-
-const UNARY_INTRINSICS = [
-    :sqrt
-    :sin
-    :cos
-    :exp
-    :trunc
-    :exp2
-    :log
-    :log10
-    :log2
-    :fabs
-    :floor
-    :ceil
-    :rint
-    :nearbyint
-    :round
-]
-
-for f in UNARY_INTRINSICS
-    @eval begin
-    @generated function $(f)(x::LVec{N, T}) where {N, T <: FloatingTypes}
-        ff = llvm_name($(QuoteNode(f)), N, T)
-        return :(
-            $(Expr(:meta, :inline));
-            ccall($ff, llvmcall, LVec{N, T}, (LVec{N, T},), x)
-        )
-    end
-    end
-end
-
-# fneg
-@generated function fneg(x::LVec{N, T}) where {N, T<:FloatingTypes}
-    s = """
-    %2 = fneg <$(N) x $(d[T])> %0
-    ret <$(N) x $(d[T])> %2
-    """
-    return :(
-        $(Expr(:meta, :inline));
-        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}}, x)
-    )
-end
-
-#####################
-# Binary operators  #
-#####################
-
-const BINARY_INTRINSICS = [
-    :minnum,
-    :maxnum,
-    :minimum,
-    :maximum,
-    :copysign,
-    :pow,
-    :floor,
-    :ceil,
-    :trunc,
-    :rint,
-    :nearbyint,
-    :round,
-]
-
-for f in BINARY_INTRINSICS
-    @eval @generated function $(f)(x::LVec{N, T}, y::LVec{N, T}) where {N, T <: FloatingTypes}
-        ff = llvm_name($(QuoteNode(f)), N, T)
-        return :(
-            $(Expr(:meta, :inline));
-            ccall($ff, llvmcall, LVec{N, T}, (LVec{N, T}, LVec{N, T}), x, y)
-        )
-    end
-end
-
-# pow, powi
-for (f, constraint) in [(:pow, FloatingTypes), (:powi, IntegerTypes)]
-    @eval @generated function $(f)(x::LVec{N, T1}, y::T2) where {N, T1 <: FloatingTypes, T2 <: $constraint}
-        ff = llvm_name($(QuoteNode(f)), N, T1)
-        return :(
-            $(Expr(:meta, :inline));
-            ccall($ff, llvmcall, LVec{N, T1}, (LVec{N, T1}, T2), x, y)
-        )
-    end
-end
-
-####################
-# Bit manipulation #
-####################
-
-const BITMANIPULATION_INTRINSICS = [
-    :bitreverse,
-    :bswap,
-    :ctpop,
-    :ctlz,
-    :cttz,
-    :fshl,
-    :fshr,
-]
-
-for f in BITMANIPULATION_INTRINSICS
-    @eval @generated function $(f)(x::LVec{N, T}) where {N, T <: IntegerTypes}
-        ff = llvm_name($(QuoteNode(f)), N, T)
-        return :(
-            $(Expr(:meta, :inline));
-            ccall($ff, llvmcall, LVec{N, T}, (LVec{N, T},), x)
-        )
-    end
-end
-
-@generated function or(x::LVec{N, T}) where {N, T <: IntegerTypes}
-    ff = llvm_name(:xor, N, T)
-    shfl = join((string(d[T], " ", -1) for i in 1:N), ", ")
-    s = """
-    %res = xor <$N x $(d[T])> %0, <$shfl>
-    ret <$N x $(d[T])> %res
-    """
-    return :(
-        $(Expr(:meta, :inline));
-        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, T}}, x)
-    )
-end
-
-
-##########
-# Select #
-##########
-
-@generated function select(cond::LVec{N, Bool}, x::LVec{N, T}, y::LVec{N, T}) where {N, T}
-    s = """
-    %cond = trunc <$(N) x i8> %0 to <$(N) x i1>
-    %res = select <$N x i1> %cond, <$N x $(d[T])> %1, <$N x $(d[T])> %2
-    ret <$N x $(d[T])> %res
-    """
-    return :(
-        $(Expr(:meta, :inline));
-        Base.llvmcall($s, LVec{N, T}, Tuple{LVec{N, Bool}, LVec{N, T}, LVec{N, T}}, cond, x, y)
-    )
-end
-
-###########
-# Fmuladd #
-###########
-
-const MULADD_INTRINSICS = [
-    :fmuladd,
-    :fma,
-]
-
-for f in MULADD_INTRINSICS
-    @eval @generated function $(f)(a::LVec{N, T}, b::LVec{N, T}, c::LVec{N, T}) where {N, T<:FloatingTypes}
-        ff = llvm_name($(QuoteNode(f)), N, T)
-        return :(
-            $(Expr(:meta, :inline));
-            ccall($ff, llvmcall, LVec{N, T}, (LVec{N, T}, LVec{N, T}, LVec{N, T}), a, b, c)
-        )
-    end
-end
-
-#########################
-# Horizontal reductions #
-#########################
+##################################
+# Horizontal reductions (LLVM 9) #
+##################################
 
 const HORZ_REDUCTION_OPS = [
     (:and, :and)
@@ -516,23 +503,5 @@ for (f, neutral) in [(:fadd, "0.0"), (:fmul, "1.0")]
         end
     end
 end
-#=
-
-for (f, neutral) in [(:fadd, "0.0"), (:fmul, "1.0")]
-    f_red = Symbol("reduce_v2_", f)
-    @eval @generated function $f_red(x::LVec{N, T}) where {N,T<:FloatingTypes}
-        ff = llvm_name(string("experimental.vector.reduce.v2.", suffix(T), ".", $(QuoteNode(f))), N, T)
-        @show ff
-        decl = "declare $(d[T]) @$ff($(d[T]), <$N x $(d[T])>)"
-        s2 = """
-        %res = call $(d[T]) @$ff($(d[T]) $($neutral), <4 x $(d[T])> %0)
-        ret $(d[T]) %res
-        """
-        return quote
-            Base.llvmcall($(decl, s2), T, Tuple{LVec{4, T},}, x)
-        end
-    end
-end
-=#
 
 end

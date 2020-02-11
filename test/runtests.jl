@@ -89,7 +89,7 @@ llvm_ir(f, args) = sprint(code_llvm, f, Base.typesof(args...))
         global const v8i32b = map(x->Int32(x+1), v8i32)
         global const v8i32c = map(x->Int32(x*2), v8i32)
 
-        notbool(x::T) where {T} = !(x>=0)
+        notbool(x) = !(x>=typeof(x)(0))
         for op in (~, +, -, abs, notbool, sign, signbit)
             @test Tuple(op(V8I32(v8i32))) == map(op, v8i32)
         end
